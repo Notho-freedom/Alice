@@ -12,30 +12,25 @@ Provides an animated, colorized terminal experience with:
 from __future__ import annotations
 
 import asyncio
+import itertools
 import logging
-import sys
 import time
 
 from rich.console import Console, Group
-from rich.live import Live
 from rich.panel import Panel
 from rich.text import Text
-from rich.spinner import Spinner
 from rich.markup import escape
-from rich.markdown import Markdown
-from rich.columns import Columns
-from rich.align import Align
 
 from .. import config
 from ..kilo.client import KiloClient, KiloServerError
 from ..kilo.session import SessionManager
-from ..kilo.stream import ChunkType
+from ..kilo.stream import ResponseStreamProcessor, ChunkType
 from ..core.state_machine import StateMachine, Event
 from ..core.lifecycle import Lifecycle, AppConfig
 
 log = logging.getLogger("alice.terminal.rich")
 
-# Console configured for UTF-8 with colors
+# Console configured for Windows compatibility
 _console = Console(
     force_terminal=True,
     color_system="auto",
@@ -43,23 +38,28 @@ _console = Console(
     highlight=True,
     soft_wrap=False,
     stderr=False,
+    legacy_windows=False,
 )
 
 
 def _print_logo():
     """Print animated Alice logo."""
     logo_lines = [
-        ("  ╔════════════════════════════════════════════════════════════╗", "cyan"),
-        ("  ║                                                            ║", "cyan"),
-        ("  ║         A    L    I    C    E                           ║", "magenta"),
-        ("  ║          Local Voice Assistant                            ║", "cyan"),
-        ("  ║          Powered by Kilo Code                           ║", "cyan"),
-        ("  ║                                                            ║", "cyan"),
-        ("  ╚════════════════════════════════════════════════════════════╝", "cyan"),
+        "  +============================================================+",
+        "  |                                                            |",
+        ("  |         A    L    I    C    E                           |", "magenta"),
+        ("  |          Local Voice Assistant                          |", "cyan"),
+        ("  |          Powered by Kilo Code                         |", "cyan"),
+        "  |                                                            |",
+        "  +============================================================+",
     ]
 
-    for line, color in logo_lines:
-        _console.print(line, style=color)
+    for item in logo_lines:
+        if isinstance(item, tuple):
+            line, color = item
+            _console.print(line, style=color)
+        else:
+            _console.print(item, style="cyan")
         time.sleep(0.03)
 
 
@@ -76,6 +76,7 @@ class TerminalAssistant:
         self._kilo: KiloClient | None = None
         self._sessions: SessionManager | None = None
         self._session_id: str | None = None
+        self._processor = ResponseStreamProcessor()
 
     async def initialize(self):
         """Start Kilo server and create session."""
@@ -110,6 +111,8 @@ class TerminalAssistant:
             ),
             border_style="blue",
             padding=(0, 2),
+            title="Alice Terminal",
+            title_align="left",
         )
         _console.print(banner)
         _console.print()
@@ -118,65 +121,59 @@ class TerminalAssistant:
         """Send a message and stream response with visual effects."""
         self.state_machine.fire(Event.PROMPT_SENT)  # IDLE -> THINKING
 
-        # Show "Kilo is thinking" spinner
-        thinking_text = Text("Kilo is thinking", style="dim")
-        with _console.status(thinking_text, spinner="dots"):
-            # Start SSE stream
-            stream = await self._kilo.subscribe_events(self._session_id)
-            await stream.start()
-            await asyncio.sleep(0.5)
+        print("  Kilo is thinking ", end="", flush=True)
+        spinner = itertools.cycle(["|", "/", "-", "\\"])
 
-            # Send prompt
-            self._sessions.touch(self._session_id)
-            self._kilo.send_prompt(self._session_id, text)
+        stream = await self._kilo.subscribe_events(self._session_id)
+        await stream.start()
+        await asyncio.sleep(0.5)
 
-            # Process events
-            response_text = ""
-            tool_active = False
-            tool_name = ""
-            tokens = {}
-            got_completion = False
-            timeout = time.time() + 120
+        # Send prompt
+        self._sessions.touch(self._session_id)
+        self._kilo.send_prompt(self._session_id, text)
 
-            while time.time() < timeout and not got_completion:
-                try:
-                    event = await asyncio.wait_for(stream.next_event(), timeout=3)
-                except asyncio.TimeoutError:
-                    continue
+        # Process events
+        response_text = ""
+        tokens = {}
+        got_completion = False
+        timeout = time.time() + 120
 
-                if event is None:
-                    break
+        while time.time() < timeout and not got_completion:
+            try:
+                event = await asyncio.wait_for(stream.next_event(), timeout=3)
+            except asyncio.TimeoutError:
+                print(f"\r  {next(spinner)} ", end="", flush=True)
+                continue
 
-                from ..kilo.stream import ResponseStreamProcessor
-                processor = ResponseStreamProcessor()
-                chunks = processor.process(event)
+            if event is None:
+                break
 
-                for chunk in chunks:
-                    if chunk.type == ChunkType.TEXT and chunk.text:
-                        response_text += chunk.text
-                        # Print character by character for typing effect
-                        _console.print(chunk.text, style="white", end="", highlight=False)
-                        sys.stdout.flush()
-                    elif chunk.type == ChunkType.COMPLETION:
-                        got_completion = True
-                    elif chunk.type == ChunkType.TOOL_START:
-                        tool_name = chunk.data.get("tool", "")
-                        _console.print(f"\n[TOOL] {escape(tool_name)}", style="cyan")
-                    elif chunk.type == ChunkType.STEP_END:
-                        tokens = chunk.data.get("tokens", {})
-                    elif chunk.type == ChunkType.ERROR:
-                        _console.print(f"\n[ERROR] {escape(chunk.text)}", style="red")
+            chunks = self._processor.process(event)
+            for chunk in chunks:
+                if chunk.type == ChunkType.TEXT and chunk.text:
+                    response_text += chunk.text
+                    print(f"\r{chunk.text}", end="", flush=True)
+                elif chunk.type == ChunkType.COMPLETION:
+                    got_completion = True
+                elif chunk.type == ChunkType.TOOL_START:
+                    tool_name = chunk.data.get("tool", "")
+                    print(f"\n  [TOOL] {tool_name}", flush=True)
+                elif chunk.type == ChunkType.STEP_END:
+                    tokens = chunk.data.get("tokens", {})
+                elif chunk.type == ChunkType.ERROR:
+                    print(f"\n  [ERROR] {chunk.text}", flush=True)
+                    got_completion = True
 
-            await stream.stop()
+        print("\r  " + " " * 20 + "\r", end="", flush=True)
+        await stream.stop()
 
-        self.state_machine.fire(Event.THINKING_COMPLETED)  # THINKING -> SPEAKING
-        # Terminal mode has no TTS - just text output
-        self.state_machine.fire(Event.TTS_COMPLETED)  # SPEAKING -> IDLE
+        self.state_machine.fire(Event.THINKING_COMPLETED)
+        self.state_machine.fire(Event.TTS_COMPLETED)
 
         # Print metadata
         if tokens:
             total = tokens.get("total", sum(tokens.get(k, 0) for k in ("input", "output", "reasoning")))
-            _console.print(f"\n  [dim]tokens: {total}[/dim]")
+            print(f"  [dim]tokens: {total}[/dim]")
 
     async def run(self):
         """Main REPL loop."""
@@ -186,7 +183,7 @@ class TerminalAssistant:
         while self._lifecycle.context.running:
             try:
                 user_input = await asyncio.get_event_loop().run_in_executor(
-                    None, input, "  "
+                    None, input, "  > "
                 )
             except (EOFError, KeyboardInterrupt):
                 break
