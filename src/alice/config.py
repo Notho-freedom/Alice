@@ -37,20 +37,24 @@ STT_PROVIDER = os.getenv("STT_PROVIDER", "deepgram")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 DEEPGRAM_API_KEY = os.getenv("DEEPGRAM_API_KEY", "")
 STT_DETECT_LANGUAGE = os.getenv("STT_DETECT_LANGUAGE", "true").lower() in ("1", "true", "yes")
-STT_LANGUAGE = os.getenv("STT_LANGUAGE", "en-US")
+STT_LANGUAGE = os.getenv("STT_LANGUAGE", "fr")  # Default to French
 
 # ── TTS ─────────────────────────────────────────────────────────────────
-# Priority chain: ElevenLabs → VAPI → Edge (local backend) → Pi TTS (coqui) → pyttsx3
+# Priority chain: ElevenLabs (key1/key2) → VAPI → Edge → Pi TTS → pyttsx3
 TTS_PROVIDER = os.getenv("TTS_PROVIDER", "auto")
 TTS_RATE = int(os.getenv("TTS_RATE", "200"))
 TTS_VOLUME = float(os.getenv("TTS_VOLUME", "1.0"))
-TTS_VOICE = os.getenv("TTS_VOICE", "en-US-AriaNeural")
+TTS_VOICE = os.getenv("TTS_VOICE", "marie")  # French female voice default
 TTS_BACKEND_URL = os.getenv("TTS_BACKEND_URL", "http://127.0.0.1:8000")
-TTS_LANGUAGE = os.getenv("TTS_LANGUAGE", "")  # auto-detect if empty
-TTS_LANGUAGE_CODE = TTS_LANGUAGE  # ISO 639-1 code (e.g., "en", "fr", "es")
+TTS_LANGUAGE = os.getenv("TTS_LANGUAGE", "fr")  # Default to French
+TTS_LANGUAGE_CODE = TTS_LANGUAGE  # ISO 639-1 code (e.g., "fr", "en", "es")
 
-# ElevenLabs
-ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY", "")
+# ElevenLabs (cloud, high quality) — 2 keys for credit fallback
+ELEVENLABS_API_KEY1 = os.getenv("ELEVENLABS_API_KEY1", "")
+ELEVENLABS_API_KEY2 = os.getenv("ELEVENLABS_API_KEY2", "")
+ELEVENLABS_API_KEY = ELEVENLABS_API_KEY1  # Primary key
+ELEVENLABS_VOICE = os.getenv("ELEVENLABS_VOICE", "Rachel")
+ELEVENLABS_MODEL = os.getenv("ELEVENLABS_MODEL", "eleven_multilingual_v2")
 
 # VAPI
 VAPI_API_KEY = os.getenv("VAPI_API_KEY", "")

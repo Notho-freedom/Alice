@@ -42,11 +42,13 @@ class VoiceConfig:
     input_device: int = 1
     output_device: int = 3
     sample_rate: int = 16000
-    stt_provider: str = "openai"
-    tts_provider: str = "edge"
+    stt_provider: str = "deepgram"
+    tts_provider: str = "auto"
     wake_word: str = "hey assistant"
     ptt: bool = True  # push-to-talk mode
     continuous: bool = False  # conversation continuity (M8)
+    voice: str | None = None  # TTS voice name or ID
+    language: str | None = None  # Language code (e.g., "fr", "en")
 
 
 class VoiceAssistant:
@@ -100,7 +102,10 @@ class VoiceAssistant:
             log.warning("stt_no_provider", extra={"provider": config.STT_PROVIDER})
 
         # TTS
-        self._tts = create_tts()
+        self._tts = create_tts(
+            voice=self.cfg.voice,
+            language=self.cfg.language,
+        )
         if self._tts:
             log.info("tts_provider_available", extra={"provider": config.TTS_PROVIDER})
         else:

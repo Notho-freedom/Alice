@@ -22,7 +22,10 @@ def cli():
 @cli.command()
 @click.option("--ptt", is_flag=True, default=True, help="Use push-to-talk mode (default).")
 @click.option("--continuous", "-c", is_flag=True, default=False, help="Continuous conversation mode with wake word.")
-def voice(ptt, continuous):
+@click.option("--voice", "-v", default=None, help="Voice name or ID (e.g., 'marie', 'victoria').")
+@click.option("--language", "-l", default=None, help="Language code (e.g., 'fr', 'en', 'es').")
+@click.option("--list-voices", is_flag=True, default=False, help="List available voices and exit.")
+def voice(ptt, continuous, voice, language, list_voices):
     """Start Alice in voice (audio) mode."""
     # Suppress verbose logging during voice mode
     logging.getLogger().setLevel(logging.WARNING)
@@ -31,9 +34,32 @@ def voice(ptt, continuous):
         print(f"  WARNING: {e}")
 
     from .voice.assistant import VoiceAssistant, VoiceConfig
+
+    # List available voices if requested
+    if list_voices:
+        from .voice.tts import create_tts
+        from .voice.tts.elevenlabs import FRENCH_FEMALE_VOICES
+        tts = create_tts()
+        if tts is None:
+            print("  No TTS provider available")
+            return
+        
+        print("\n  Available voices:")
+        print("  -- ElevenLabs (French female) --")
+        for name, vid in FRENCH_FEMALE_VOICES.items():
+            print(f"    {name}: {vid}")
+        
+        if hasattr(tts, "providers"):
+            print(f"\n  Provider chain: {' -> '.join(type(p).__name__ for p in tts.providers)}")
+        else:
+            print(f"\n  Provider: {type(tts).__name__}")
+        return
+
     vc = VoiceConfig(
         ptt=ptt and not continuous,
         continuous=continuous,
+        voice=voice,
+        language=language,
     )
     assistant = VoiceAssistant(voice_config=vc)
     asyncio.run(assistant.initialize())

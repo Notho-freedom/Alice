@@ -1,7 +1,8 @@
 """TTS provider using ElevenLabs API.
 
 High-quality neural voices with multilingual support.
-Uses ELEVENLABS_API_KEY from environment.
+Supports two API keys for credit fallback.
+Uses ELEVENLABS_API_KEY1 and ELEVENLABS_API_KEY2 from environment.
 """
 
 from __future__ import annotations
@@ -19,23 +20,52 @@ from .base import TextToSpeech
 log = logging.getLogger("alice.voice.tts.elevenlabs")
 
 
+# French female voices (verified from ElevenLabs API)
+FRENCH_FEMALE_VOICES = {
+    "victoria": "O31r762Gb3WFygrEOGh0",  # Parisian accent, Content Creator
+    "marie": "tMyQcCxfGDdIt7wJ2RQw",    # Soft, Calm and Captivating
+    "anna": "PSVUmed8NvS8aUA3d5oO",     # Standard accent, audiobook
+}
+
+
 class ElevenLabsTTS(TextToSpeech):
     """Text-to-speech via ElevenLabs cloud API.
 
     Provides high-quality neural voices with automatic language detection.
-    Falls back to EdgeTTS if the API call fails.
+    Supports two API keys for credit fallback.
     """
 
     def __init__(
         self,
-        api_key: str | None = None,
-        voice_id: str | None = None,
+        api_keys: list[str] | None = None,
+        voice_name: str | None = None,
+        language: str | None = None,
     ):
-        self.api_key = api_key or config.ELEVENLABS_API_KEY
-        self.voice_id = voice_id or "21m00Tcm4TlvDq8pnDb4e"
+        # Support two API keys for fallback
+        if api_keys:
+            self.api_keys = api_keys
+        else:
+            self.api_keys = [config.ELEVENLABS_API_KEY1, config.ELEVENLABS_API_KEY2]
+            self.api_keys = [k for k in self.api_keys if k]  # Remove empty keys
+        
+        if not self.api_keys:
+            raise ValueError("No ElevenLabs API keys provided")
+        
+        self.voice_name = voice_name or config.ELEVENLABS_VOICE or "marie"
+        self.language = language or config.TTS_LANGUAGE_CODE or "fr"
         self._playing = False
         self._stop_flag = False
         self._session: aiohttp.ClientSession | None = None
+        self._current_key_index = 0
+
+    def _get_current_key(self) -> str:
+        """Get the current API key."""
+        return self.api_keys[self._current_key_index % len(self.api_keys)]
+
+    def _rotate_key(self) -> bool:
+        """Try the next API key. Returns True if there's another key to try."""
+        self._current_key_index += 1
+        return self._current_key_index < len(self.api_keys)
 
     async def _ensure_session(self):
         if self._session is None or self._session.closed:
@@ -55,28 +85,59 @@ class ElevenLabsTTS(TextToSpeech):
     def is_speaking(self) -> bool:
         return self._playing
 
-    def _select_voice(self, language: str | None = None) -> str:
-        """Select an appropriate voice ID for the given language."""
-        lang_map = {
-            "en": "21m00Tcm4TlvDq8pnDb4e",  # Rachel (en-US)
-            "fr": "K2khGgu88xikqC8AS4f4",  # Nicom (fr-FR)
-            "es": "EXW5v3zX9Z8hZ4e3v6k7",  # TBD
-            "de": "O2k0Y5j8qN9nE3w6k7mZ",  # TBD
-            "zh": "Z6v9Y5j8qN9nE3w6k7mZ",  # TBD
-            "ja": "3kF5j8qN9nE3w6k7mZ8b",  # TBD
-            "ko": "7mZ5j8qN9nE3w6k7mZ8b1",  # TBD
-            "it": "9Y5j8qN9nE3w6k7mZ8b1c",  # TBD
-            "pt": "4TlvDq8pnDb4e21m00Tcm",  # TBD
-            "ru": "5j8qN9nE3w6k7mZ8b1c2",  # TBD
-            "ar": "8qN9nE3w6k7mZ8b1c2d3",  # TBD
-            "hi": "9nE3w6k7mZ8b1c2d3e4",  # TBD
+    def _resolve_voice_id(self, language: str | None = None) -> str:
+        """Resolve the voice ID based on language."""
+        lang = language or self.language
+        lang_code = lang.split("-")[0].lower() if lang else "fr"
+        
+        # If voice_name is a known French female voice, use it
+        if self.voice_name.lower() in FRENCH_FEMALE_VOICES:
+            return FRENCH_FEMALE_VOICES[self.voice_name.lower()]
+        
+        # Default French female voice
+        if lang_code == "fr":
+            return FRENCH_FEMALE_VOICES.get("marie", "tMyQcCxfGDdIt7wJ2RQw")
+        
+        # English fallback
+        if lang_code == "en":
+            return "21m00Tcm4TlvDq8pnDb4e"  # Rachel
+        
+        # Default to Marie (multilingual)
+        return "tMyQcCxfGDdIt7wJ2RQw"
+
+    async def _call_elevenlabs(self, text: str, voice_id: str, api_key: str) -> tuple[bytes, int]:
+        """Call ElevenLabs API with a specific key. Returns (audio_data, status_code)."""
+        session = await self._ensure_session()
+        url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}/stream"
+        
+        payload = {
+            "text": text,
+            "model_id": config.ELEVENLABS_MODEL,
+            "voice_settings": {
+                "stability": 0.75,
+                "similarity_boost": 0.75,
+            },
         }
         
-        if not language:
-            language = config.TTS_LANGUAGE_CODE
-        
-        lang_code = language.split("-")[0].lower() if language else "en"
-        return lang_map.get(lang_code, self.voice_id)
+        async with session.post(
+            url,
+            json=payload,
+            headers={
+                "xi-api-key": api_key,
+                "Content-Type": "application/json",
+            },
+            timeout=aiohttp.ClientTimeout(total=30),
+        ) as resp:
+            if resp.status == 200:
+                return await resp.read(), resp.status
+            
+            error_body = await resp.text()
+            log.error("elevenlabs_api_error", extra={
+                "status": resp.status,
+                "body": error_body[:300],
+                "key_index": self._current_key_index,
+            })
+            return b"", resp.status
 
     async def speak(self, text: str, language: str | None = None) -> bool:
         """Speak text via ElevenLabs. Returns True on success, False on failure."""
@@ -87,48 +148,37 @@ class ElevenLabsTTS(TextToSpeech):
         self._stop_flag = False
 
         try:
-            session = await self._ensure_session()
-            voice_id = self._select_voice(language)
-
-            # ElevenLabs API
-            url = "https://api.elevenlabs.io/v1/text-to-speech/{voice_id}/stream".replace(
-                "{voice_id}", voice_id
-            )
-
-            payload = {
-                "text": text,
-                "model_id": "eleven_multilingual_v2",
-                "voice_settings": {
-                    "stability": 0.75,
-                    "similarity_boost": 0.75,
-                    "speaking_rate": 1.0,
-                },
-            }
-
-            async with session.post(
-                url,
-                json=payload,
-                headers={
-                    "xi-api-key": self.api_key,
-                    "Content-Type": "application/json",
-                },
-                timeout=aiohttp.ClientTimeout(total=30),
-            ) as resp:
-                if resp.status != 200:
-                    error_body = await resp.text()
-                    log.error("elevenlabs_api_error", extra={
-                        "status": resp.status,
-                        "body": error_body[:200],
-                    })
-                    return False
+            voice_id = self._resolve_voice_id(language)
+            audio_data = b""
+            status = 0
+            
+            # Try all API keys
+            max_attempts = len(self.api_keys)
+            for _ in range(max_attempts):
+                api_key = self._get_current_key()
+                audio_data, status = await self._call_elevenlabs(text, voice_id, api_key)
                 
-                # ElevenLabs returns raw MP3 audio stream
-                audio_data = await resp.read()
+                if status == 200:
+                    break
+                elif status in (401, 403):
+                    # Invalid key, try next
+                    log.warning("elevenlabs_key_invalid", extra={"key_index": self._current_key_index})
+                    if not self._rotate_key():
+                        break
+                elif status == 429:
+                    # Rate limit, try next key
+                    log.warning("elevenlabs_rate_limited", extra={"key_index": self._current_key_index})
+                    if not self._rotate_key():
+                        break
+                else:
+                    # Other error, stop trying
+                    break
 
-            if audio_data and not self._stop_flag:
+            if status == 200 and audio_data and not self._stop_flag:
                 await self._play_mp3(audio_data)
-
-            return True
+                return True
+            
+            return False
 
         except Exception as e:
             log.error("elevenlabs_tts_error", extra={"error": str(e)})

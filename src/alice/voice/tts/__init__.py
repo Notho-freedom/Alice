@@ -1,11 +1,13 @@
 """Factory for selecting TTS providers based on configuration.
 
 Priority chain (per spec):
-1. ElevenLabs — cloud API, highest quality, multilingual
-2. VAPI — cloud API, good quality, multilingual
-3. Edge (local backend) — local server, good quality via edge-tts
-4. Pi TTS (coqui) — local backend, offline neural TTS
-5. pyttsx3 — last-resort fallback, low quality but always works
+1. ElevenLabs — cloud API, highest quality, multilingual (2 API keys for credit fallback)
+2. Edge (local backend) — local server, good quality via edge-tts
+3. Pi TTS (coqui) — local backend, offline neural TTS
+4. pyttsx3 — last-resort fallback, low quality but always works
+
+Note: VAPI is NOT included because it's a managed voice AI pipeline
+(phone calls + STT + LLM + TTS), not a standalone TTS API.
 """
 
 from __future__ import annotations
@@ -96,41 +98,31 @@ class TTSCascade:
                 pass
 
 
-def create_tts() -> TextToSpeech | None:
+def create_tts(voice: str | None = None, language: str | None = None) -> TextToSpeech | None:
     """Create a TTS provider or fallback cascade.
 
     Priority:
-    1. ElevenLabs (if ELEVENLABS_API_KEY set)
-    2. VAPI (if VAPI_API_KEY set)
-    3. Edge (local backend, default)
-    4. Pi TTS (local backend)
-    5. pyttsx3 (offline fallback)
+    1. ElevenLabs (if ELEVENLABS_API_KEY1 or ELEVENLABS_API_KEY2 set)
+    2. Edge (local backend)
+    3. Pi TTS (local backend)
+    4. pyttsx3 (offline fallback)
     """
     provider = config.TTS_PROVIDER.lower()
     providers: list[TextToSpeech] = []
 
     # Auto mode: build cascade from available providers
     if provider == "auto" or provider == "elevenlabs":
-        if config.ELEVENLABS_API_KEY:
-            try:
-                providers.append(ElevenLabsTTS())
-                log.info("elevenlabs_tts_added")
-            except Exception as e:
-                log.warning("elevenlabs_init_failed", extra={"error": str(e)})
-
-    if provider == "auto" or provider == "vapi":
-        if config.VAPI_API_KEY:
-            try:
-                providers.append(VAPITTS())
-                log.info("vapi_tts_added")
-            except Exception as e:
-                log.warning("vapi_init_failed", extra={"error": str(e)})
+        try:
+            providers.append(ElevenLabsTTS(voice_name=voice, language=language))
+            log.info("elevenlabs_tts_added")
+        except Exception as e:
+            log.warning("elevenlabs_init_failed", extra={"error": str(e)})
 
     if provider == "auto" or provider == "edge":
         try:
             providers.append(EdgeTTS(
                 backend_url=config.TTS_BACKEND_URL,
-                voice=config.TTS_VOICE,
+                voice=voice or config.TTS_VOICE,
             ))
             log.info("edge_tts_added")
         except Exception as e:
