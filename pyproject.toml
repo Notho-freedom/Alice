@@ -1,0 +1,38 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "alice"
+version = "0.1.0"
+description = "Local voice assistant powered by Kilo Code"
+requires-python = ">=3.11"
+dependencies = [
+    "aiohttp>=3.10",
+    "requests>=2.31",
+    "numpy>=2.0",
+    "scipy>=1.14",
+    "sounddevice>=0.5",
+    "webrtcvad>=2.0",
+    "rich>=13.0",
+    "pydantic>=2.5",
+    "click>=8.1",
+    "pyttsx3>=2.90",
+    "openai>=1.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.24",
+]
+
+[project.scripts]
+alice = "alice.terminal:cli"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/alice"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
