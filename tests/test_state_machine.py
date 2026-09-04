@@ -119,6 +119,15 @@ class TestStateMachine:
         sm.reset()
         assert sm.state == State.IDLE
 
+    def test_recover_from_thinking(self):
+        """RECOVER is valid from THINKING (e.g., empty transcript)."""
+        sm = StateMachine()
+        sm.fire(Event.START_LISTENING)  # IDLE -> LISTENING
+        sm.fire(Event.SPEECH_ENDED)     # LISTENING -> THINKING
+        assert sm.state == State.THINKING
+        sm.fire(Event.RECOVER)          # THINKING -> IDLE
+        assert sm.state == State.IDLE
+
     def test_history_tracking(self):
         """State transitions are recorded in history."""
         sm = StateMachine()

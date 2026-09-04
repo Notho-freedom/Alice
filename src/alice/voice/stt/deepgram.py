@@ -42,6 +42,7 @@ class DeepgramSTT:
     def __init__(self, api_key: str | None = None):
         self.api_key = api_key or config.DEEPGRAM_API_KEY
         self._listening = False
+        self.detected_language: str | None = None
 
         if self.api_key:
             log.info("deepgram_client_ready")
@@ -86,7 +87,12 @@ class DeepgramSTT:
 
             # Deepgram API endpoint
             url = "https://api.deepgram.com/v1/listen"
-            params = "?model=nova-2&smart_format=true&punctuate=true&language=en"
+            params = "?model=nova-2&smart_format=true&punctuate=true"
+
+            if config.STT_DETECT_LANGUAGE:
+                params += "&detect_language=true"
+            elif config.STT_LANGUAGE:
+                params += f"&language={config.STT_LANGUAGE}"
 
             request = urllib.request.Request(
                 url + params,
@@ -105,6 +111,15 @@ class DeepgramSTT:
             # Extract transcript
             results = result.get("results", {})
             channels = results.get("channels", [])
+            
+            # Store detected language for downstream TTS voice selection
+            detected = results.get("detected_language")
+            if detected:
+                self.detected_language = detected
+                log.info("language_detected", extra={"language": detected})
+                if not config.TTS_LANGUAGE:
+                    config._tts_language = detected
+            
             if channels:
                 alternatives = channels[0].get("alternatives", [])
                 if alternatives:

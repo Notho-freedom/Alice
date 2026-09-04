@@ -23,11 +23,12 @@ class PyTTSX3TTS(TextToSpeech):
         self._speaking = False
         self._lock = threading.Lock()
 
-    async def speak(self, text: str) -> None:
+    async def speak(self, text: str, language: str | None = None) -> bool:
         if not text:
-            return
+            return True
         loop = asyncio.get_event_loop()
         await loop.run_in_executor(self._executor_speak, text)
+        return True
 
     def _executor_speak(self, text: str) -> None:
         self._speaking = True
@@ -37,7 +38,7 @@ class PyTTSX3TTS(TextToSpeech):
         finally:
             self._speaking = False
 
-    async def stream_speak(self, chunks) -> None:
+    async def stream_speak(self, chunks, language: str | None = None) -> None:
         collected = ""
         async for chunk in chunks:
             collected += chunk

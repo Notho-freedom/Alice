@@ -109,7 +109,9 @@ class VoiceAssistant:
         # Interruption handler (only if we have TTS)
         if self._tts:
             self._interrupter = InterruptionHandler(self._vad)
-            self._interrupter.set_tts_stop_callback(self._tts.stop)
+            self._interrupter.set_tts_stop_callback(
+                lambda: asyncio.create_task(self._tts.stop())
+            )
             self._interrupter.set_kilo_interrupt_callback(
                 lambda: self._kilo.interrupt(self.lifecycle.context.session_id)
             )
@@ -226,7 +228,7 @@ class VoiceAssistant:
             await asyncio.sleep(0.05)
 
             # Handle speech → STT → Kilo → TTS cycle
-            if self.state_machine.state == State.TRANSCRIBING:
+            if self.state_machine.state == State.THINKING:
                 await self._handle_transcription()
 
         await self.cleanup()
@@ -274,14 +276,13 @@ class VoiceAssistant:
         log.info("interruption_triggered")
         self.state_machine.fire(Event.INTERRUPTION_DETECTED)
 
-        # Rule A: stop TTS immediately (sync call for pyttsx3, async for edge)
+        # Rule A: stop TTS immediately (sync for pyttsx3, async for edge)
         if self._tts:
             try:
-                # pyttsx3 stop() is synchronous
                 if hasattr(self._tts, '_engine'):
                     self._tts._engine.stop()
                 else:
-                    asyncio.get_event_loop().create_task(self._tts.stop())
+                    asyncio.create_task(self._tts.stop())
                 self._tts._playing = False
             except Exception as e:
                 log.warning("tts_stop_failed", extra={"error": str(e)})
@@ -299,10 +300,11 @@ class VoiceAssistant:
         self._transcription_buffer.clear()
 
         if len(audio_data) < 1000:
+            # No meaningful audio - transition back to LISTENING
+            self.state_machine.fire(Event.RECOVER)
+            self.state_machine.fire(Event.START_LISTENING)
             print("\r  [Listening...]      ", end="", flush=True)
             return
-
-        self.state_machine.fire(Event.PROMPT_SENT)
 
         # Transcribe
         try:
@@ -322,6 +324,7 @@ class VoiceAssistant:
         if not text.strip():
             print("\r  [Listening...]      ", end="", flush=True)
             self.state_machine.fire(Event.RECOVER)
+            self.state_machine.fire(Event.START_LISTENING)
             return
 
         print(f"\r  You: {text}\n", flush=True)
@@ -402,10 +405,10 @@ class VoiceAssistant:
         await self._stream.stop()
         self._stream = None
 
-        # Return to listening state
-        self.state_machine.fire(Event.TTS_STARTED)  # THINKING -> SPEAKING (if not already)
-        self.state_machine.fire(Event.TTS_COMPLETED)  # SPEAKING -> IDLE
-        self.state_machine.fire(Event.START_LISTENING)  # IDLE -> LISTENING
+        # Return to listening state (state transitions happened in _speak_text)
+        if self.state_machine.state != State.LISTENING:
+            self.state_machine.fire(Event.TTS_COMPLETED)  # SPEAKING -> IDLE if needed
+            self.state_machine.fire(Event.START_LISTENING)  # IDLE -> LISTENING
         print(f"\r  [Listening...]      ", end="", flush=True)
 
     async def _tts_consumer(self, queue: asyncio.Queue):
@@ -442,9 +445,14 @@ class VoiceAssistant:
         if self.state_machine.state == State.INTERRUPTING:
             return
 
+        # Get detected language from STT for appropriate voice selection
+        detected_lang = None
+        if self._stt and hasattr(self._stt, "detected_language"):
+            detected_lang = self._stt.detected_language
+
         self.state_machine.fire(Event.TTS_STARTED)
         try:
-            await self._tts.speak(text)
+            await self._tts.speak(text, detected_lang)
         except Exception as e:
             log.error("tts_error", extra={"error": str(e)})
         self.state_machine.fire(Event.TTS_COMPLETED)

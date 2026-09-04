@@ -100,14 +100,22 @@ def doctor():
 
     # Check TTS
     try:
-        if cfg.TTS_PROVIDER == "edge":
-            import aiohttp
-            print(f"  TTS (Edge backend @ {cfg.TTS_BACKEND_URL}): OK")
+        from .voice.tts import create_tts
+        tts = create_tts()
+        if tts is None:
+            print("  TTS: NOT available")
+            ok = False
         else:
-            import pyttsx3
-            print("  TTS (pyttsx3): OK")
+            # List all providers in cascade
+            providers = []
+            if hasattr(tts, "providers"):
+                providers = [type(p).__name__ for p in tts.providers]
+            else:
+                providers = [type(tts).__name__]
+            provider_names = " -> ".join(providers)
+            print(f"  TTS ({provider_names}): OK")
     except ImportError as e:
-        print(f"  TTS: NOT available ({cfg.TTS_PROVIDER})")
+        print(f"  TTS: NOT available ({e})")
         ok = False
 
     # Check Kilo server

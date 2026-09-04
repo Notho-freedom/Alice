@@ -81,6 +81,7 @@ _TRANSITIONS: dict[State, dict[Event, State]] = {
         Event.INTERRUPTION_DETECTED: State.INTERRUPTING,
         Event.SESSION_ENDED: State.IDLE,
         Event.ERROR_OCCURRED: State.ERROR,
+        Event.RECOVER: State.IDLE,
     },
     State.SPEAKING: {
         Event.INTERRUPTION_DETECTED: State.INTERRUPTING,

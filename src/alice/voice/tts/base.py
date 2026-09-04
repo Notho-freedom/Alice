@@ -13,11 +13,15 @@ class TextToSpeech(ABC):
     """
 
     @abstractmethod
-    async def speak(self, text: str) -> None:
-        """Speak the given text fully, blocking until done."""
+    async def speak(self, text: str, language: str | None = None) -> bool | None:
+        """Speak the given text fully, blocking until done.
+
+        Returns True on success, False on failure, None for providers
+        that don't track success/failure.
+        """
 
     @abstractmethod
-    async def stream_speak(self, chunks: AsyncIterator[str]) -> None:
+    async def stream_speak(self, chunks: AsyncIterator[str], language: str | None = None) -> None:
         """Speak text from an async iterator of chunks.
 
         Should interleave with VAD monitoring so speech can be interrupted.

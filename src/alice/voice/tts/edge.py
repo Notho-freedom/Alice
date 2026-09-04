@@ -59,10 +59,10 @@ class EdgeTTS(TextToSpeech):
     def is_speaking(self) -> bool:
         return self._playing
 
-    async def speak(self, text: str) -> None:
+    async def speak(self, text: str, language: str | None = None) -> bool:
         """Speak full text via the backend /api/tts endpoint."""
         if not text:
-            return
+            return True
 
         self._playing = True
         self._stop_flag = False
@@ -80,12 +80,14 @@ class EdgeTTS(TextToSpeech):
 
             if audio_data and not self._stop_flag:
                 await self._play_mp3(audio_data)
+            return True
         except Exception as e:
             log.error("edge_tts_speak_error", extra={"error": str(e)})
+            return False
         finally:
             self._playing = False
 
-    async def stream_speak(self, chunks: AsyncIterator[str]) -> None:
+    async def stream_speak(self, chunks: AsyncIterator[str], language: str | None = None) -> None:
         """Speak text from async chunk iterator, using the backend streaming endpoint.
 
         Collects the first meaningful chunk and sends it to the backend

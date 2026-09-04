@@ -36,13 +36,29 @@ WAKE_WORD = os.getenv("WAKE_WORD", "hey assistant")
 STT_PROVIDER = os.getenv("STT_PROVIDER", "deepgram")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 DEEPGRAM_API_KEY = os.getenv("DEEPGRAM_API_KEY", "")
+STT_DETECT_LANGUAGE = os.getenv("STT_DETECT_LANGUAGE", "true").lower() in ("1", "true", "yes")
+STT_LANGUAGE = os.getenv("STT_LANGUAGE", "en-US")
 
 # ── TTS ─────────────────────────────────────────────────────────────────
-TTS_PROVIDER = os.getenv("TTS_PROVIDER", "edge")
+# Priority chain: ElevenLabs → VAPI → Edge (local backend) → Pi TTS (coqui) → pyttsx3
+TTS_PROVIDER = os.getenv("TTS_PROVIDER", "auto")
 TTS_RATE = int(os.getenv("TTS_RATE", "200"))
 TTS_VOLUME = float(os.getenv("TTS_VOLUME", "1.0"))
 TTS_VOICE = os.getenv("TTS_VOICE", "en-US-AriaNeural")
 TTS_BACKEND_URL = os.getenv("TTS_BACKEND_URL", "http://127.0.0.1:8000")
+TTS_LANGUAGE = os.getenv("TTS_LANGUAGE", "")  # auto-detect if empty
+TTS_LANGUAGE_CODE = TTS_LANGUAGE  # ISO 639-1 code (e.g., "en", "fr", "es")
+
+# ElevenLabs
+ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY", "")
+
+# VAPI
+VAPI_API_KEY = os.getenv("VAPI_API_KEY", "")
+VAPI_VOICE_ID = os.getenv("VAPI_VOICE_ID", "")
+VAPI_BASE_URL = os.getenv("VAPI_BASE_URL", "https://api.vapi.ai")
+
+# Pi TTS (coqui/edge-tts-pi) — local backend
+PI_TTS_URL = os.getenv("PI_TTS_URL", "http://127.0.0.1:8001")
 
 # ── Interrupt ───────────────────────────────────────────────────────────
 INTERRUPT_THRESHOLD_MS = int(os.getenv("INTERRUPT_THRESHOLD_MS", "300"))
@@ -59,12 +75,6 @@ def validate_environment() -> list[str]:
     import shutil
     if not shutil.which("kilo"):
         errors.append("kilo CLI not found in PATH")
-
-    # Check STT provider
-    if STT_PROVIDER == "deepgram" and not DEEPGRAM_API_KEY:
-        errors.append("DEEPGRAM_API_KEY not set (required for Deepgram STT)")
-    elif STT_PROVIDER == "openai" and not OPENAI_API_KEY:
-        errors.append("OPENAI_API_KEY not set (required for OpenAI STT)")
 
     return errors
 
