@@ -82,6 +82,8 @@ __main__.py    — CLI entry point
 
 - M0: Audit complete
 - M1: Kilo Bridge — complete
+- STT: Deepgram with language auto-detection (multilingual)
+- TTS: Provider cascade (ElevenLabs → VAPI → Edge → Pi TTS → pyttsx3)
 - M2-M10: pending
 
 ### Environment
@@ -89,4 +91,4 @@ __main__.py    — CLI entry point
 - Python 3.11.9 on Windows (win32)
 - Kilo CLI 7.5.9
 - Audio devices: Microphone Array (idx 1), Speakers (idx 3) via sounddevice
-- Packages: aiohttp, numpy, scipy, sounddevice, webrtcvad, rich, pydantic, click, pyttsx3, openai, requests
+- Packages: aiohttp, numpy, scipy, sounddevice, webrtcvad, rich, pydantic, click, pyttsx3, openai, requests, soundfile
