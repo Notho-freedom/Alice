@@ -40,11 +40,11 @@ def voice(ptt, continuous):
     if continuous:
         asyncio.run(assistant.run_continuous())
     else:
-        asyncio.run(assistant.run_push_to_talk()
+        asyncio.run(assistant.run_push_to_talk())
 
 
 @cli.command()
-def     terminal():
+def terminal():
     """Start Alice in terminal (text) mode."""
     # Only log warnings+ during terminal mode
     logging.getLogger("alice").setLevel(logging.WARNING)
