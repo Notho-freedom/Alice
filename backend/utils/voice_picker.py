@@ -2,6 +2,22 @@
 import random
 from services.edge_tts_engine import list_voices
 
+# Map Alice voice names to valid EdgeTTS ShortNames
+ALICE_VOICE_MAP = {
+    # French female voices
+    "marie": "fr-FR-DeniseNeural",
+    "victoria": "fr-FR-VivienneMultilingualNeural",
+    "anna": "fr-FR-EloiseNeural",
+    # English female voices
+    "rachel": "en-US-AriaNeural",
+    "alice": "en-GB-SoniaNeural",
+    "laura": "en-US-JennyNeural",
+    "sarah": "en-US-GuyNeural",
+    "jessica": "en-US-EmmaNeural",
+    "bella": "en-US-MichelleNeural",
+    "lily": "en-GB-LibbyNeural",
+}
+
 PERSONA_KEYWORDS = {
     "news": ["news", "presenter", "anchor"],
     "cheerful": ["cheerful", "joyful", "friendly"],
@@ -24,6 +40,19 @@ PREFERRED = {
     "ko": "ko-KR-SunHiNeural",
     "hi": "hi-IN-SwaraNeural",
 }
+
+
+def resolve_alice_voice(voice: str | None) -> str | None:
+    """Map Alice voice name to EdgeTTS ShortName if needed."""
+    if not voice:
+        return None
+    voice_lower = voice.lower()
+    if voice_lower in ALICE_VOICE_MAP:
+        return ALICE_VOICE_MAP[voice_lower]
+    # Already a ShortName (contains hyphen and locale pattern)
+    if "-" in voice and any(voice.endswith(suffix) for suffix in ["Neural", "MultilingualNeural"]):
+        return voice
+    return None
 
 
 async def pick_voice_for_lang(lang_code: str, persona: str | None = None) -> str:

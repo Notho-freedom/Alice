@@ -214,10 +214,11 @@ class VoiceAssistant:
     async def run_continuous(self):
         """Run in continuous conversation mode with VAD-based activation (M8).
 
-        After wake word activation, the user can continue speaking
-        without re-activating, until a silence period ends the turn.
+        In continuous mode, the assistant listens for speech and transcribes,
+        then sends to Kilo. Kilo decides whether the text is addressing the
+        assistant — if not, it responds with "[IGNORED]" and Alice stays silent.
         """
-        print("\n  Alice Voice Assistant (Continuous Mode)")
+        print("\n  Alice Voice Assistant (Conversation Mode)")
         print(f"  Session: {self.lifecycle.context.session_id[:24]}...")
         print(f"  Speak naturally. Silence > {config.VAD_MIN_SILENCE_MS}ms ends a turn.")
         print("  Press Ctrl+C to exit.\n")
@@ -305,7 +306,6 @@ class VoiceAssistant:
         self._transcription_buffer.clear()
 
         if len(audio_data) < 1000:
-            # No meaningful audio - transition back to LISTENING
             self.state_machine.fire(Event.RECOVER)
             self.state_machine.fire(Event.START_LISTENING)
             print("\r  [Listening...]      ", end="", flush=True)
@@ -332,10 +332,34 @@ class VoiceAssistant:
             self.state_machine.fire(Event.START_LISTENING)
             return
 
+        # Lightweight correction for common mishearings of the assistant name
+        corrections = {
+            "adi": "Alice",
+            "alisa": "Alice",
+            "aliza": "Alice",
+            "alis": "Alice",
+        }
+        lowered = text.strip().lower()
+        for wrong, right in corrections.items():
+            if lowered == wrong:
+                text = right
+                break
+
         print(f"\r  You: {text}\n", flush=True)
 
+        # Add context instruction for continuous mode — Kilo decides if text is addressing Alice
+        prompt = text
+        if self.cfg.continuous:
+            prompt = (
+                "[SYSTEM INSTRUCTION: You are Alice, a local voice assistant. "
+                "If the user is directly addressing you or asking you something, respond normally in the same language. "
+                "If the user is NOT addressing you (just talking to themselves, the computer, or off-topic), "
+                "respond with exactly: [IGNORED] and nothing else.]\n\n"
+                + text
+            )
+
         # Send to Kilo and speak
-        await self._send_and_speak(text)
+        await self._send_and_speak(prompt)
 
     # ── Kilo response → TTS pipeline ────────────────────────────────
 
@@ -384,6 +408,13 @@ class VoiceAssistant:
                 if chunk.type == ChunkType.TEXT and chunk.text:
                     text_buffer += chunk.text
                     self._text_chunks_received = True
+
+                    # Check if Kilo responded with [IGNORED] (not addressing Alice)
+                    if "[IGNORED]" in text_buffer[:50]:
+                        # Cancel TTS, don't speak
+                        self._interrupt_requested = True
+                        continue
+
                     await speech_queue.put(chunk.text)
                 elif chunk.type == ChunkType.COMPLETION:
                     got_completion = True
@@ -410,18 +441,26 @@ class VoiceAssistant:
         await self._stream.stop()
         self._stream = None
 
+        # If Kilo indicated the message was not for Alice, skip TTS
+        if "[IGNORED]" in text_buffer[:200]:
+            log.info("message_not_for_alice", extra={"transcript": text_buffer[:100]})
+            # Return to listening state without speaking
+            if self.state_machine.state == State.THINKING:
+                self.state_machine.fire(Event.THINKING_COMPLETED)  # THINKING -> SPEAKING
+            if self.state_machine.state == State.SPEAKING:
+                self.state_machine.fire(Event.TTS_COMPLETED)  # SPEAKING -> IDLE
+            self.state_machine.fire(Event.START_LISTENING)  # IDLE -> LISTENING
+            print(f"\r  [Ignored - listening...]      ", end="", flush=True)
+            return
+
         # Return to listening state (state transitions happened in _speak_text)
-        # After _speak_text, state is IDLE (from TTS_COMPLETED)
-        # Just go to LISTENING from current state
         if self.state_machine.state == State.SPEAKING:
             self.state_machine.fire(Event.TTS_COMPLETED)  # SPEAKING -> IDLE
         if self.state_machine.state == State.IDLE:
             self.state_machine.fire(Event.START_LISTENING)  # IDLE -> LISTENING
         elif self.state_machine.state != State.LISTENING:
-            # Try to recover to LISTENING
             self.state_machine.fire(Event.RECOVER)  # Any state -> IDLE
             self.state_machine.fire(Event.START_LISTENING)  # IDLE -> LISTENING
-        
         print(f"\r  [Listening...]      ", end="", flush=True)
 
     async def _tts_consumer(self, queue: asyncio.Queue):

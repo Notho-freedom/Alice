@@ -94,6 +94,9 @@ class DeepgramSTT:
             elif config.STT_LANGUAGE:
                 params += f"&language={config.STT_LANGUAGE}"
 
+            # Hint Deepgram toward Alice/French context to reduce misreads like "Adi"
+            params += "&keyterms=Alice"
+
             request = urllib.request.Request(
                 url + params,
                 data=wav_data,
@@ -124,12 +127,24 @@ class DeepgramSTT:
                 alternatives = channels[0].get("alternatives", [])
                 if alternatives:
                     transcript = alternatives[0].get("transcript", "")
-                    return transcript.strip() if transcript else ""
+                    confidence = alternatives[0].get("confidence", 1.0)
+                    
+                    # Filter low-confidence transcripts
+                    if confidence < 0.5:
+                        log.warning("stt_low_confidence", extra={"confidence": confidence, "transcript": transcript[:100]})
+                        return ""
+                    
+                    cleaned = transcript.strip()
+                    # Ignore obviously broken transcripts like "Okay....]"
+                    if len(cleaned) < 2 or cleaned.count(".") > 4 or cleaned.count("]") > 0:
+                        return ""
+                    
+                    return cleaned
 
             return ""
 
         except Exception as e:
-            log.error("deepgram_transcribe_error", extra={"error": str(e)})
+            log.error("deepgram_transcribe_error", extra={"error": str(e), "type": type(e).__name__})
             return ""
 
     async def stream(self, audio_chunk: bytes) -> AsyncIterator[str]:

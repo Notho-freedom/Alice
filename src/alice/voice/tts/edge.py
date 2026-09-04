@@ -41,13 +41,20 @@ class EdgeTTS(TextToSpeech):
         self._stop_flag = False
         self._session: aiohttp.ClientSession | None = None
 
-        # Map Alice voice names to valid EdgeTTS voice IDs
+        # Map Alice voice names to valid EdgeTTS voice ShortNames
         self._voice_map = {
-            "marie": "fr-FR-Elenora",
-            "victoria": "fr-FR-Vivienne",
-            "anna": "fr-FR-Brigitte",
+            # French female voices (priority order)
+            "marie": "fr-FR-DeniseNeural",
+            "victoria": "fr-FR-VivienneMultilingualNeural",
+            "anna": "fr-FR-EloiseNeural",
+            # English female voices (fallback)
             "rachel": "en-US-AriaNeural",
             "alice": "en-GB-SoniaNeural",
+            "laura": "en-US-JennyNeural",
+            "sarah": "en-US-GuyNeural",
+            "jessica": "en-US-EmmaNeural",
+            "bella": "en-US-MichelleNeural",
+            "lily": "en-GB-LibbyNeural",
         }
 
     def _resolve_voice(self) -> str:

@@ -3,7 +3,7 @@ from models.schemas import TTSRequest
 from services.edge_tts_engine import synthesize_full
 from services.language import detect_language
 from services.cache import make_key, get as cache_get, put as cache_put
-from utils.voice_picker import pick_voice_for_lang
+from utils.voice_picker import pick_voice_for_lang, resolve_alice_voice
 
 router = APIRouter()
 
@@ -14,6 +14,11 @@ async def tts(req: TTSRequest):
     if not voice:
         det = detect_language(req.text)
         voice = await pick_voice_for_lang(det["lang"], req.persona)
+    else:
+        # Resolve Alice voice names to EdgeTTS ShortNames
+        resolved = resolve_alice_voice(voice)
+        if resolved:
+            voice = resolved
     key = make_key(req.text, voice, req.rate, req.pitch)
     cached = cache_get(key)
     if cached is not None:
