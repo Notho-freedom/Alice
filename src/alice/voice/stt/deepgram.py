@@ -10,7 +10,9 @@ from __future__ import annotations
 import io
 import json
 import logging
+import struct
 import urllib.request
+import wave
 from typing import AsyncIterator
 
 from ... import config
@@ -18,11 +20,23 @@ from ... import config
 log = logging.getLogger("alice.voice.stt.deepgram")
 
 
+def _pcm_to_wav(pcm_data: bytes, sample_rate: int = 16000, channels: int = 1) -> bytes:
+    """Wrap raw 16-bit PCM data in a WAV header."""
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as w:
+        w.setnchannels(channels)
+        w.setsampwidth(2)  # 16-bit
+        w.setframerate(sample_rate)
+        w.writeframes(pcm_data)
+    return buf.getvalue()
+
+
 class DeepgramSTT:
     """Speech-to-text using Deepgram's REST API.
 
-    No SDK required. Uses pure HTTP requests with the API key.
-    Supports WAV audio transcription via the /v1/listen endpoint.
+    No SDK required. Uses urllib HTTP requests with the API key.
+    Audio data is expected as raw 16-bit PCM (16kHz mono).
+    The provider wraps it in a WAV header before sending to Deepgram.
     """
 
     def __init__(self, api_key: str | None = None):
@@ -43,10 +57,10 @@ class DeepgramSTT:
         log.info("stt_deepgram_stopped")
 
     async def transcribe(self, audio: bytes) -> str:
-        """Transcribe WAV audio bytes via Deepgram REST API.
+        """Transcribe audio bytes via Deepgram REST API.
 
-        Converts WAV (16kHz mono) to the format expected by Deepgram.
-        Uses the /v1/listen endpoint with nova-2 model.
+        Accepts raw 16-bit PCM audio (16kHz, mono) and wraps it
+        in a WAV header before sending to the API.
         """
         if not self.api_key:
             return ""
@@ -55,13 +69,20 @@ class DeepgramSTT:
             return ""
 
         try:
-            # Convert numpy array or bytes to raw bytes
-            if hasattr(audio, 'tobytes'):
+            # Convert audio to raw bytes
+            if hasattr(audio, "tobytes"):
                 raw_audio = audio.tobytes()
             elif isinstance(audio, (bytes, bytearray)):
                 raw_audio = bytes(audio)
             else:
                 raw_audio = bytes(audio)
+
+            # Wrap in WAV header for Deepgram API
+            wav_data = _pcm_to_wav(
+                raw_audio,
+                sample_rate=config.AUDIO_SAMPLE_RATE,
+                channels=config.AUDIO_CHANNELS,
+            )
 
             # Deepgram API endpoint
             url = "https://api.deepgram.com/v1/listen"
@@ -69,7 +90,7 @@ class DeepgramSTT:
 
             request = urllib.request.Request(
                 url + params,
-                data=raw_audio,
+                data=wav_data,
                 headers={
                     "Authorization": f"Token {self.api_key}",
                     "Content-Type": "audio/wav",
