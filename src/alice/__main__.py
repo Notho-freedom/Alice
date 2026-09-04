@@ -24,10 +24,10 @@ def cli():
 @click.option("--continuous", "-c", is_flag=True, default=False, help="Continuous conversation mode with wake word.")
 def voice(ptt, continuous):
     """Start Alice in voice (audio) mode."""
-    logger = setup_logging()
+    # Suppress verbose logging during voice mode
+    logging.getLogger().setLevel(logging.WARNING)
     errors = validate_environment()
     for e in errors:
-        logger.error("startup_check_failed", extra={"error": e})
         print(f"  WARNING: {e}")
 
     from .voice.assistant import VoiceAssistant, VoiceConfig
@@ -40,13 +40,14 @@ def voice(ptt, continuous):
     if continuous:
         asyncio.run(assistant.run_continuous())
     else:
-        asyncio.run(assistant.run_push_to_talk())
+        asyncio.run(assistant.run_push_to_talk()
 
 
 @cli.command()
-def terminal():
+def     terminal():
     """Start Alice in terminal (text) mode."""
-    setup_logging()
+    # Only log warnings+ during terminal mode
+    logging.getLogger("alice").setLevel(logging.WARNING)
     errors = validate_environment()
     for e in errors:
         print(f"  WARNING: {e}")
