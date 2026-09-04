@@ -41,6 +41,20 @@ class EdgeTTS(TextToSpeech):
         self._stop_flag = False
         self._session: aiohttp.ClientSession | None = None
 
+        # Map Alice voice names to valid EdgeTTS voice IDs
+        self._voice_map = {
+            "marie": "fr-FR-Elenora",
+            "victoria": "fr-FR-Vivienne",
+            "anna": "fr-FR-Brigitte",
+            "rachel": "en-US-AriaNeural",
+            "alice": "en-GB-SoniaNeural",
+        }
+
+    def _resolve_voice(self) -> str:
+        """Resolve voice name to EdgeTTS voice ID."""
+        voice_lower = self.voice.lower() if self.voice else ""
+        return self._voice_map.get(voice_lower, self.voice or "fr-FR-Elenora")
+
     async def _ensure_session(self):
         if self._session is None or self._session.closed:
             self._session = aiohttp.ClientSession()
@@ -69,9 +83,10 @@ class EdgeTTS(TextToSpeech):
 
         try:
             session = await self._ensure_session()
+            resolved_voice = self._resolve_voice()
             async with session.post(
                 f"{self.backend_url}/api/tts",
-                json={"text": text, "voice": self.voice},
+                json={"text": text, "voice": resolved_voice},
                 timeout=aiohttp.ClientTimeout(total=30),
             ) as resp:
                 if resp.status != 200:
@@ -82,7 +97,7 @@ class EdgeTTS(TextToSpeech):
                 await self._play_mp3(audio_data)
             return True
         except Exception as e:
-            log.error("edge_tts_speak_error", extra={"error": str(e)})
+            log.error("edge_tts_speak_error", extra={"error": str(e), "type": type(e).__name__})
             return False
         finally:
             self._playing = False
@@ -115,9 +130,10 @@ class EdgeTTS(TextToSpeech):
 
         try:
             session = await self._ensure_session()
+            resolved_voice = self._resolve_voice()
             async with session.post(
                 f"{self.backend_url}/api/tts/stream",
-                json={"text": text, "voice": self.voice},
+                json={"text": text, "voice": resolved_voice},
                 timeout=aiohttp.ClientTimeout(total=30),
             ) as resp:
                 if resp.status != 200:

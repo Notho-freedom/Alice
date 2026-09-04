@@ -26,9 +26,13 @@ class PyTTSX3TTS(TextToSpeech):
     async def speak(self, text: str, language: str | None = None) -> bool:
         if not text:
             return True
-        loop = asyncio.get_event_loop()
-        await loop.run_in_executor(self._executor_speak, text)
-        return True
+        try:
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(None, self._executor_speak, text)
+            return True
+        except Exception as e:
+            log.error("pyttsx3_speak_error", extra={"error": str(e)})
+            return False
 
     def _executor_speak(self, text: str) -> None:
         self._speaking = True
@@ -47,8 +51,11 @@ class PyTTSX3TTS(TextToSpeech):
             await self.speak(collected)
 
     async def stop(self) -> None:
-        loop = asyncio.get_event_loop()
-        await loop.run_in_executor(self._executor_stop, None)
+        try:
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(None, self._executor_stop, None)
+        except Exception as e:
+            log.warning("pyttsx3_stop_failed", extra={"error": str(e)})
 
     def _executor_stop(self, _=None) -> None:
         self._engine.stop()

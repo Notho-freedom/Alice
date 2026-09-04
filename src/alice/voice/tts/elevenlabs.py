@@ -21,10 +21,39 @@ log = logging.getLogger("alice.voice.tts.elevenlabs")
 
 
 # French female voices (verified from ElevenLabs API)
+# Note: Only "Anna", "Victoria", "Marie Alice" are French but require paid plan
+# Free plan voices are primarily English - we use English female voices as fallback
 FRENCH_FEMALE_VOICES = {
-    "victoria": "O31r762Gb3WFygrEOGh0",  # Parisian accent, Content Creator
-    "marie": "tMyQcCxfGDdIt7wJ2RQw",    # Soft, Calm and Captivating
-    "anna": "PSVUmed8NvS8aUA3d5oO",     # Standard accent, audiobook
+    "marie": "tMyQcCxfGDdIt7wJ2RQw",  # Requires paid plan
+    "victoria": "O31r762Gb3WFygrEOGh0",  # Requires paid plan
+    "anna": "PSVUmed8NvS8aUA3d5oO",  # Requires paid plan
+}
+
+# All working voices on free plan (tested)
+FREE_VOICES = {
+    # Female voices (priority order)
+    "sarah": "EXAVITQu4vr4xnSDxMaL",  # American female, mature
+    "laura": "FGY2WhTYpPnrIDTdsKH5",  # American female, enthusiastic
+    "alice": "Xb7hH8MSUJpSbSDYk0k2",  # British female, educator
+    "matilda": "XrExE9yKIg1WjnnlVkGX",  # American female, professional
+    "jessica": "cgSgspJ2msm6clMCkdW9",  # American female, playful
+    "bella": "hpp4J3VqNfWAUOO0d1Us",  # American female, professional
+    "lily": "pFZP5JQG7iQjIQuC4Bku",  # British female, actress
+    # Male voices (fallback)
+    "roger": "CwhRBWXzGAHq8TQ4Fs17",  # American male, casual
+    "charlie": "IKne3meq5aSn9XLyUdCD",  # Australian male
+    "george": "JBFqnCBsd6RMkjVDRZzb",  # British male, storyteller
+    "callum": "N2lVS1w4EtoT3dr4eOWO",  # American male, trickster
+    "river": "SAz9YHcvj6GT2YYXdXww",  # American, neutral
+    "harry": "SOYHLrjzK2X1ezoPC6cr",  # American male, warrior
+    "liam": "TX3LPaxmHKxFdv7VOQHJ",  # American male, energetic
+    "will": "bIHbv24MWmeRgasZH58o",  # American male, optimist
+    "eric": "cjVigY5qzO86Huf0OWal",  # American male, smooth
+    "chris": "iP95p4xoKVk53GoZ742B",  # American male, charming
+    "brian": "nPczCjzI2devNBz1zQrb",  # American male, comforting
+    "daniel": "onwK4e9ZLuTAKqWW03F9",  # British male, broadcaster
+    "adam": "pNInz6obpgDQGcFmaJgB",  # American male, dominant
+    "bill": "pqHfZKP75CvOlQylNhV4",  # American male, wise
 }
 
 
@@ -86,24 +115,46 @@ class ElevenLabsTTS(TextToSpeech):
         return self._playing
 
     def _resolve_voice_id(self, language: str | None = None) -> str:
-        """Resolve the voice ID based on language."""
+        """Resolve the voice ID based on language, with fallback chain.
+        
+        Priority:
+        1. If voice_name is specified, use it
+        2. If language is French, try French female voices (even if paid, might work)
+        3. Fallback to free English female voices
+        4. Fallback to free English male voices
+        """
         lang = language or self.language
         lang_code = lang.split("-")[0].lower() if lang else "fr"
         
-        # If voice_name is a known French female voice, use it
-        if self.voice_name.lower() in FRENCH_FEMALE_VOICES:
-            return FRENCH_FEMALE_VOICES[self.voice_name.lower()]
+        # If explicit voice name provided, use it
+        if self.voice_name and self.voice_name.lower() in FREE_VOICES:
+            return FREE_VOICES[self.voice_name.lower()]
         
-        # Default French female voice
+        # French preference - try French voices first (even if paid, they might work)
         if lang_code == "fr":
-            return FRENCH_FEMALE_VOICES.get("marie", "tMyQcCxfGDdIt7wJ2RQw")
+            # Try French voices in order
+            for name in ["marie", "victoria", "anna"]:
+                if name in FRENCH_FEMALE_VOICES:
+                    return FRENCH_FEMALE_VOICES[name]
         
-        # English fallback
+        # English fallback - use free female voices
         if lang_code == "en":
-            return "21m00Tcm4TlvDq8pnDb4e"  # Rachel
+            # Female voices first
+            for name in ["sarah", "laura", "alice", "matilda", "jessica", "bella", "lily"]:
+                if name in FREE_VOICES:
+                    return FREE_VOICES[name]
+            # Male fallback
+            for name in ["roger", "charlie", "george", "callum", "river"]:
+                if name in FREE_VOICES:
+                    return FREE_VOICES[name]
         
-        # Default to Marie (multilingual)
-        return "tMyQcCxfGDdIt7wJ2RQw"
+        # Default: use first available free female voice
+        for name in ["sarah", "laura", "alice", "matilda", "jessica", "bella", "lily"]:
+            if name in FREE_VOICES:
+                return FREE_VOICES[name]
+        
+        # Last resort: any voice
+        return list(FREE_VOICES.values())[0]
 
     async def _call_elevenlabs(self, text: str, voice_id: str, api_key: str) -> tuple[bytes, int]:
         """Call ElevenLabs API with a specific key. Returns (audio_data, status_code)."""
@@ -140,7 +191,10 @@ class ElevenLabsTTS(TextToSpeech):
             return b"", resp.status
 
     async def speak(self, text: str, language: str | None = None) -> bool:
-        """Speak text via ElevenLabs. Returns True on success, False on failure."""
+        """Speak text via ElevenLabs. Returns True on success, False on failure.
+        
+        Tests multiple voices in priority order if the first one fails.
+        """
         if not text:
             return True
 
@@ -148,35 +202,34 @@ class ElevenLabsTTS(TextToSpeech):
         self._stop_flag = False
 
         try:
-            voice_id = self._resolve_voice_id(language)
-            audio_data = b""
-            status = 0
+            # Get prioritized list of voices to try
+            voices_to_try = self._get_voice_priority_list(language)
             
-            # Try all API keys
-            max_attempts = len(self.api_keys)
-            for _ in range(max_attempts):
-                api_key = self._get_current_key()
-                audio_data, status = await self._call_elevenlabs(text, voice_id, api_key)
-                
-                if status == 200:
-                    break
-                elif status in (401, 403):
-                    # Invalid key, try next
-                    log.warning("elevenlabs_key_invalid", extra={"key_index": self._current_key_index})
-                    if not self._rotate_key():
+            # Try each API key with each voice
+            for voice_id in voices_to_try:
+                # Try all API keys for this voice
+                max_attempts = len(self.api_keys)
+                for _ in range(max_attempts):
+                    api_key = self._get_current_key()
+                    audio_data, status = await self._call_elevenlabs(text, voice_id, api_key)
+                    
+                    if status == 200:
+                        if audio_data and not self._stop_flag:
+                            await self._play_mp3(audio_data)
+                            return True
+                    elif status in (401, 403):
+                        # Invalid key, try next
+                        log.warning("elevenlabs_key_invalid", extra={"key_index": self._current_key_index})
+                        if not self._rotate_key():
+                            break
+                    elif status == 429:
+                        # Rate limit, try next key
+                        log.warning("elevenlabs_rate_limited", extra={"key_index": self._current_key_index})
+                        if not self._rotate_key():
+                            break
+                    else:
+                        # Other error (e.g., 402 paid plan), try next voice
                         break
-                elif status == 429:
-                    # Rate limit, try next key
-                    log.warning("elevenlabs_rate_limited", extra={"key_index": self._current_key_index})
-                    if not self._rotate_key():
-                        break
-                else:
-                    # Other error, stop trying
-                    break
-
-            if status == 200 and audio_data and not self._stop_flag:
-                await self._play_mp3(audio_data)
-                return True
             
             return False
 
@@ -185,6 +238,47 @@ class ElevenLabsTTS(TextToSpeech):
             return False
         finally:
             self._playing = False
+
+    def _get_voice_priority_list(self, language: str | None = None) -> list[str]:
+        """Get prioritized list of voice IDs to try based on language."""
+        lang = language or self.language
+        lang_code = lang.split("-")[0].lower() if lang else "fr"
+        
+        voices = []
+        
+        if lang_code == "fr":
+            # French: try French voices first, then English female, then English male
+            for name in ["marie", "victoria", "anna"]:
+                if name in FRENCH_FEMALE_VOICES:
+                    voices.append(FRENCH_FEMALE_VOICES[name])
+            for name in ["sarah", "laura", "alice", "matilda", "jessica", "bella", "lily"]:
+                if name in FREE_VOICES:
+                    voices.append(FREE_VOICES[name])
+            for name in ["roger", "charlie", "george", "callum", "river"]:
+                if name in FREE_VOICES:
+                    voices.append(FREE_VOICES[name])
+        elif lang_code == "en":
+            # English: female first, then male
+            for name in ["sarah", "laura", "alice", "matilda", "jessica", "bella", "lily"]:
+                if name in FREE_VOICES:
+                    voices.append(FREE_VOICES[name])
+            for name in ["roger", "charlie", "george", "callum", "river"]:
+                if name in FREE_VOICES:
+                    voices.append(FREE_VOICES[name])
+        else:
+            # Other languages: try all free voices in priority order
+            for name in ["sarah", "laura", "alice", "matilda", "jessica", "bella", "lily"]:
+                if name in FREE_VOICES:
+                    voices.append(FREE_VOICES[name])
+            for name in ["roger", "charlie", "george", "callum", "river"]:
+                if name in FREE_VOICES:
+                    voices.append(FREE_VOICES[name])
+        
+        # Add custom voice if specified
+        if self.voice_name and self.voice_name.lower() in FREE_VOICES:
+            voices.insert(0, FREE_VOICES[self.voice_name.lower()])
+        
+        return voices if voices else ["EXAVITQu4vr4xnSDxMaL"]  # Default to Sarah
 
     async def stream_speak(self, chunks: AsyncIterator[str], language: str | None = None) -> None:
         """Speak text from async chunk iterator."""

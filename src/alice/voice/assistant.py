@@ -411,9 +411,17 @@ class VoiceAssistant:
         self._stream = None
 
         # Return to listening state (state transitions happened in _speak_text)
-        if self.state_machine.state != State.LISTENING:
-            self.state_machine.fire(Event.TTS_COMPLETED)  # SPEAKING -> IDLE if needed
+        # After _speak_text, state is IDLE (from TTS_COMPLETED)
+        # Just go to LISTENING from current state
+        if self.state_machine.state == State.SPEAKING:
+            self.state_machine.fire(Event.TTS_COMPLETED)  # SPEAKING -> IDLE
+        if self.state_machine.state == State.IDLE:
             self.state_machine.fire(Event.START_LISTENING)  # IDLE -> LISTENING
+        elif self.state_machine.state != State.LISTENING:
+            # Try to recover to LISTENING
+            self.state_machine.fire(Event.RECOVER)  # Any state -> IDLE
+            self.state_machine.fire(Event.START_LISTENING)  # IDLE -> LISTENING
+        
         print(f"\r  [Listening...]      ", end="", flush=True)
 
     async def _tts_consumer(self, queue: asyncio.Queue):

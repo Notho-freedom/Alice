@@ -122,7 +122,7 @@ class PiTTSTTS(TextToSpeech):
             return True
 
         except Exception as e:
-            log.error("pi_tts_error", extra={"error": str(e)})
+            log.error("pi_tts_error", extra={"error": str(e), "type": type(e).__name__})
             return False
         finally:
             self._playing = False
