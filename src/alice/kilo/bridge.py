@@ -209,34 +209,14 @@ class KiloBridge:
                 chunks = self._processor.process(event)
                 for chunk in chunks:
                     yield chunk
+
+                # Stop after completion event (step.ended or turn.ended)
+                if chunks and chunks[-1].type.value == "step_end":
+                    break
         finally:
             await stream.stop()
 
     # ── Complete turn: send + stream as one unit ──────────────────────────
-
-    async def send_and_stream(
-        self,
-        text: str,
-        timeout: float = 60.0,
-    ) -> list[ResponseChunk]:
-        """Send a prompt and collect all response chunks.
-
-        Convenience method that returns the full chunk list (for simple callers).
-        For streaming/incremental processing, use send_prompt + stream_response.
-        """
-        await self.send_prompt(text)
-        chunks: list[ResponseChunk] = []
-
-        async def _collect():
-            async for chunk in self.stream_response():
-                chunks.append(chunk)
-
-        try:
-            await asyncio.wait_for(_collect(), timeout=timeout)
-        except asyncio.TimeoutError:
-            log.warning("kilo_stream_timeout", extra={"session_id": self._session_id})
-
-        return chunks
 
     async def send_and_wait(
         self,
@@ -252,7 +232,18 @@ class KiloBridge:
         - cost (from STEP_END chunk)
         - finish_reason (from STEP_END chunk)
         """
-        chunks = await self.send_and_stream(text, timeout=timeout)
+        await self.send_prompt(text)
+
+        chunks: list[ResponseChunk] = []
+
+        async def _collect():
+            async for chunk in self.stream_response():
+                chunks.append(chunk)
+
+        try:
+            await asyncio.wait_for(_collect(), timeout=timeout)
+        except asyncio.TimeoutError:
+            log.warning("kilo_stream_timeout", extra={"session_id": self._session_id})
 
         result = TurnResult(chunks=chunks)
         for chunk in chunks:

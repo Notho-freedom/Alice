@@ -30,8 +30,8 @@ from ..core.events import VoiceEvent, AppEvent
 from ..voice.input import AudioInput
 from ..voice.vad import VoiceActivityDetector
 from ..voice.wake import KeywordWakeWord
-from ..voice.stt.openai import OpenAISTT
-from ..voice.tts.pyttsx3 import PyTTSX3TTS
+from ..voice.stt import create_stt
+from ..voice.tts import create_tts
 from ..voice.interruption import InterruptionHandler
 
 log = logging.getLogger("alice.voice.assistant")
@@ -43,7 +43,7 @@ class VoiceConfig:
     output_device: int = 3
     sample_rate: int = 16000
     stt_provider: str = "openai"
-    tts_provider: str = "pyttsx3"
+    tts_provider: str = "edge"
     wake_word: str = "hey assistant"
     ptt: bool = True  # push-to-talk mode
     continuous: bool = False  # conversation continuity (M8)
@@ -93,21 +93,18 @@ class VoiceAssistant:
         )
 
         # STT
-        if config.OPENAI_API_KEY:
-            self._stt = OpenAISTT(api_key=config.OPENAI_API_KEY)
-            log.info("stt_provider_available", extra={"provider": "openai"})
+        self._stt = create_stt()
+        if self._stt:
+            log.info("stt_provider_available", extra={"provider": config.STT_PROVIDER})
         else:
-            log.warning("stt_no_api_key", extra={"provider": "openai"})
+            log.warning("stt_no_provider", extra={"provider": config.STT_PROVIDER})
 
         # TTS
-        try:
-            self._tts = PyTTSX3TTS(
-                rate=config.TTS_RATE,
-                volume=config.TTS_VOLUME,
-            )
-            log.info("tts_provider_available", extra={"provider": "pyttsx3"})
-        except Exception as e:
-            log.warning("tts_unavailable", extra={"error": str(e)})
+        self._tts = create_tts()
+        if self._tts:
+            log.info("tts_provider_available", extra={"provider": config.TTS_PROVIDER})
+        else:
+            log.warning("tts_unavailable")
 
         # Interruption handler (only if we have TTS)
         if self._tts:

@@ -68,7 +68,8 @@ class TerminalAssistant:
 
         print(f"\nAssistant:", end="", flush=True)
 
-        async for chunk in self._bridge.send_and_stream(text):
+        await self._bridge.send_prompt(text)
+        async for chunk in self._bridge.stream_response():
             if chunk.type == ChunkType.TEXT and chunk.text:
                 print(chunk.text, end="", flush=True)
             elif chunk.type == ChunkType.TOOL_START:
