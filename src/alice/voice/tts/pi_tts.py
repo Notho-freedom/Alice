@@ -166,8 +166,11 @@ class PiTTSTTS(TextToSpeech):
                 blocking=False,
             )
 
-            while sd.get_busy() and not self._stop_flag:
+            while not self._stop_flag:
                 await asyncio.sleep(0.05)
+                stream = sd.get_stream()
+                if stream is not None and not stream.active:
+                    break
 
             if self._stop_flag:
                 sd.stop()

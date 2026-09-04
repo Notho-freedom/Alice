@@ -159,9 +159,12 @@ class EdgeTTS(TextToSpeech):
                 blocking=False,
             )
 
-            # Wait for playback to finish (checking stop_flag)
-            while sd.get_busy() and not self._stop_flag:
+            # Wait for playback to finish, supporting interruption via stop_flag
+            while not self._stop_flag:
                 await asyncio.sleep(0.05)
+                stream = sd.get_stream()
+                if stream is not None and not stream.active:
+                    break
 
             if self._stop_flag:
                 sd.stop()
@@ -170,7 +173,7 @@ class EdgeTTS(TextToSpeech):
             log.warning("soundfile_missing_using_pyttsx3_fallback")
             await self._play_via_pyttsx3(audio_data)
         except Exception as e:
-            log.error("audio_playback_failed", extra={"error": str(e)})
+            log.error("audio_playback_failed", extra={"error": str(e), "type": type(e).__name__, "traceback": __import__("traceback").format_exc()})
 
     async def _play_via_pyttsx3(self, audio_data: bytes) -> None:
         """Fallback: pyttsx3 can't play MP3, so just log."""

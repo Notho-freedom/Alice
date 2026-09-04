@@ -51,6 +51,14 @@ class TTSCascade:
                     "provider": provider.__class__.__name__,
                     "error": str(e),
                 })
+            finally:
+                # Close HTTP sessions on failed providers
+                if result is not True and hasattr(provider, "_session"):
+                    try:
+                        if provider._session and not provider._session.closed:
+                            await provider._session.close()
+                    except Exception:
+                        pass
         return False
 
     async def stream_speak(self, chunks, language: str | None = None) -> None:
