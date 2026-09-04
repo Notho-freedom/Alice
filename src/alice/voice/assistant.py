@@ -218,8 +218,16 @@ class VoiceAssistant:
         self._audio = AudioInput(callback=self._on_audio_chunk)
         self._audio.start()
 
+        # Start in LISTENING state immediately
+        self.state_machine.fire(Event.START_LISTENING)
+        print("  [Listening...]", end="", flush=True)
+
         while self.lifecycle.context.running:
-            await asyncio.sleep(0.1)
+            await asyncio.sleep(0.05)
+
+            # Handle speech → STT → Kilo → TTS cycle
+            if self.state_machine.state == State.TRANSCRIBING:
+                await self._handle_transcription()
 
         await self.cleanup()
 
@@ -255,21 +263,28 @@ class VoiceAssistant:
             self._transcription_buffer.extend(audio)
 
             if vad_result == "speech":
-                self.state_machine.fire(Event.SPEECH_DETECTED)
-                # Transition to TRANSCRIBING
                 if self.state_machine.state == State.LISTENING:
                     self.state_machine.fire(Event.SPEECH_DETECTED)
-            elif vad_result == "silence" and self.state_machine.state == State.TRANSCRIBING:
-                self.state_machine.fire(Event.SPEECH_ENDED)
+            elif vad_result == "silence":
+                if self.state_machine.state == State.TRANSCRIBING:
+                    self.state_machine.fire(Event.SPEECH_ENDED)
 
     def _handle_interruption(self):
         """User spoke during TTS — immediate interruption (spec section 9)."""
         log.info("interruption_triggered")
         self.state_machine.fire(Event.INTERRUPTION_DETECTED)
 
-        # Rule A: stop TTS immediately
+        # Rule A: stop TTS immediately (sync call for pyttsx3, async for edge)
         if self._tts:
-            asyncio.create_task(self._tts.stop())
+            try:
+                # pyttsx3 stop() is synchronous
+                if hasattr(self._tts, '_engine'):
+                    self._tts._engine.stop()
+                else:
+                    asyncio.get_event_loop().create_task(self._tts.stop())
+                self._tts._playing = False
+            except Exception as e:
+                log.warning("tts_stop_failed", extra={"error": str(e)})
 
         # Rule E: do NOT destroy Kilo session
         if self._kilo:
@@ -278,30 +293,65 @@ class VoiceAssistant:
         self.state_machine.fire(Event.INTERRUPTION_COMPLETED)
         # After interruption, we go to LISTENING for new speech
 
+    async def _handle_transcription(self):
+        """Process the transcription buffer: STT → Kilo → TTS."""
+        audio_data = bytes(self._transcription_buffer)
+        self._transcription_buffer.clear()
+
+        if len(audio_data) < 1000:
+            print("\r  [Listening...]      ", end="", flush=True)
+            return
+
+        self.state_machine.fire(Event.PROMPT_SENT)
+
+        # Transcribe
+        try:
+            if self._stt:
+                text = await self._stt.transcribe(audio_data)
+            else:
+                text = ""
+        except Exception as e:
+            log.error("stt_failed", extra={"error": str(e)})
+            print(f"\n  STT error: {e}\n")
+            self.state_machine.fire(Event.ERROR_OCCURRED)
+            self.state_machine.fire(Event.RECOVER)
+            self.state_machine.fire(Event.START_LISTENING)
+            print("  [Listening...]", end="", flush=True)
+            return
+
+        if not text.strip():
+            print("\r  [Listening...]      ", end="", flush=True)
+            self.state_machine.fire(Event.RECOVER)
+            return
+
+        print(f"\r  You: {text}\n", flush=True)
+
+        # Send to Kilo and speak
+        await self._send_and_speak(text)
+
     # ── Kilo response → TTS pipeline ────────────────────────────────
 
     async def _send_and_speak(self, text: str):
         """Send text to Kilo, stream response, and speak it via TTS."""
         sid = self.lifecycle.context.session_id
-        self.state_machine.fire(Event.PROMPT_SENT)  # IDLE -> THINKING
 
-        # Start SSE stream
+        # Start SSE stream first (before sending prompt to catch all events)
         self._stream = await self._kilo.subscribe_events(sid)
         await self._stream.start()
-        await asyncio.sleep(1)
+        self._interrupt_requested = False
 
         # Send prompt
         self._sessions.touch(sid)
         self._kilo.send_prompt(sid, text)
 
         # Queue for streaming TTS
-        speech_queue: asyncio.Queue[str] = asyncio.Queue()
+        speech_queue: asyncio.Queue[str | None] = asyncio.Queue()
 
         # Start TTS consumer task
         tts_task = asyncio.create_task(self._tts_consumer(speech_queue))
 
-        # Start interruption monitoring during TTS
-        if self._interrupter:
+        # Start interruption monitoring during SPEAKING
+        if self._interrupter and self._tts:
             self._interrupter.start_monitoring()
 
         # Collect events and feed speech queue
@@ -330,15 +380,21 @@ class VoiceAssistant:
                 elif chunk.type == ChunkType.COMPLETION:
                     got_completion = True
                 elif chunk.type == ChunkType.TOOL_START:
-                    self._speaking_text.append(chunk.text or "")
+                    print(f"\n[Using tool: {chunk.data.get('tool', '')}]", flush=True)
                 elif chunk.type == ChunkType.STEP_END:
-                    pass
+                    pass  # handled after loop
                 elif chunk.type == ChunkType.ERROR:
                     log.error("kilo_response_error", extra={"error": chunk.text})
+                    print(f"\n[ERROR: {chunk.text}]", flush=True)
+                    got_completion = True
 
         # Signal end of speech queue
         await speech_queue.put(None)
-        await tts_task
+        try:
+            await asyncio.wait_for(tts_task, timeout=30)
+        except asyncio.TimeoutError:
+            log.warning("tts_consumer_timeout")
+            tts_task.cancel()
 
         if self._interrupter:
             self._interrupter.stop_monitoring()
@@ -346,8 +402,11 @@ class VoiceAssistant:
         await self._stream.stop()
         self._stream = None
 
-        self.state_machine.fire(Event.THINKING_COMPLETED)
-        self.state_machine.fire(Event.TTS_COMPLETED)
+        # Return to listening state
+        self.state_machine.fire(Event.TTS_STARTED)  # THINKING -> SPEAKING (if not already)
+        self.state_machine.fire(Event.TTS_COMPLETED)  # SPEAKING -> IDLE
+        self.state_machine.fire(Event.START_LISTENING)  # IDLE -> LISTENING
+        print(f"\r  [Listening...]      ", end="", flush=True)
 
     async def _tts_consumer(self, queue: asyncio.Queue):
         """Consume text chunks from queue and speak them."""
