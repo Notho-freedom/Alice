@@ -1,14 +1,16 @@
 """STT provider using Deepgram (cloud speech recognition).
 
-Supports both file-based transcription and real-time streaming via WebSocket.
+Uses Deepgram's REST API for file-based transcription.
+No SDK required — just HTTP requests with the API key.
 Uses DEEPGRAM_API_KEY from environment.
 """
 
 from __future__ import annotations
 
+import io
 import json
 import logging
-import threading
+import urllib.request
 from typing import AsyncIterator
 
 from ... import config
@@ -17,41 +19,23 @@ log = logging.getLogger("alice.voice.stt.deepgram")
 
 
 class DeepgramSTT:
-    """Speech-to-text using Deepgram's API.
+    """Speech-to-text using Deepgram's REST API.
 
-    Uses the deepgram-sdk for real-time streaming transcription.
-    Falls back to file-based transcription for shorter buffers.
+    No SDK required. Uses pure HTTP requests with the API key.
+    Supports WAV audio transcription via the /v1/listen endpoint.
     """
 
     def __init__(self, api_key: str | None = None):
         self.api_key = api_key or config.DEEPGRAM_API_KEY
         self._listening = False
-        self._client = None
-        self._transcript = ""
-        self._lock = threading.Lock()
 
         if self.api_key:
-            try:
-                from deepgram import DeepgramClientOptions, DeepgramClient
-
-                self._client = DeepgramClient(
-                    api_key=self.api_key,
-                    config=DeepgramClientOptions(
-                        timeout=30.0,
-                        options={"keepalive": "enabled"},
-                    ),
-                )
-                log.info("deepgram_client_initialized")
-            except ImportError:
-                log.warning("deepgram_sdk_not_available", extra={
-                    "error": "Install: pip install deepgram-sdk"
-                })
-            except Exception as e:
-                log.warning("deepgram_init_failed", extra={"error": str(e)})
+            log.info("deepgram_client_ready")
+        else:
+            log.warning("deepgram_no_api_key")
 
     async def start(self) -> None:
         self._listening = True
-        self._transcript = ""
         log.info("stt_deepgram_started")
 
     async def stop(self) -> None:
@@ -59,38 +43,52 @@ class DeepgramSTT:
         log.info("stt_deepgram_stopped")
 
     async def transcribe(self, audio: bytes) -> str:
-        """Transcribe WAV audio bytes via file-based API."""
-        if not self._client:
+        """Transcribe WAV audio bytes via Deepgram REST API.
+
+        Converts WAV (16kHz mono) to the format expected by Deepgram.
+        Uses the /v1/listen endpoint with nova-2 model.
+        """
+        if not self.api_key:
+            return ""
+
+        if len(audio) == 0:
             return ""
 
         try:
-            # deepgram-sdk file transcription
-            from deepgram.utils import ProtoContext
+            # Convert numpy array or bytes to raw bytes
+            if hasattr(audio, 'tobytes'):
+                raw_audio = audio.tobytes()
+            elif isinstance(audio, (bytes, bytearray)):
+                raw_audio = bytes(audio)
+            else:
+                raw_audio = bytes(audio)
 
-            # Prepare audio data
-            if len(audio) == 0:
-                return ""
+            # Deepgram API endpoint
+            url = "https://api.deepgram.com/v1/listen"
+            params = "?model=nova-2&smart_format=true&punctuate=true&language=en"
 
-            source = {
-                "buffer": audio,
-                "mimetype": "audio/wav",
-            }
-
-            response = self._client.transcribe(
-                source,
-                {
-                    "model": "nova-2",
-                    "language": "en",
-                    "smart_format": True,
-                    "punctuate": True,
-                    "utterances": True,
+            request = urllib.request.Request(
+                url + params,
+                data=raw_audio,
+                headers={
+                    "Authorization": f"Token {self.api_key}",
+                    "Content-Type": "audio/wav",
+                    "Accept": "application/json",
                 },
+                method="POST",
             )
 
-            results = response.results
-            if results and results.alternatives:
-                transcript = results.alternatives[0].transcript
-                return transcript.strip() if transcript else ""
+            with urllib.request.urlopen(request, timeout=30) as response:
+                result = json.loads(response.read().decode("utf-8"))
+
+            # Extract transcript
+            results = result.get("results", {})
+            channels = results.get("channels", [])
+            if channels:
+                alternatives = channels[0].get("alternatives", [])
+                if alternatives:
+                    transcript = alternatives[0].get("transcript", "")
+                    return transcript.strip() if transcript else ""
 
             return ""
 
@@ -99,38 +97,10 @@ class DeepgramSTT:
             return ""
 
     async def stream(self, audio_chunk: bytes) -> AsyncIterator[str]:
-        """Stream audio chunks yielding partial transcriptions.
+        """Stream transcription — not implemented for REST API.
 
-        Uses Deepgram's real-time WebSocket API with VAD-based end-of-speech
-        detection. Each yield is a partial or final transcript string.
+        Falls back to calling transcribe() on accumulated chunks.
         """
-        if not self._client:
-            yield ""
-            return
-
-        try:
-            import asyncio
-            import sounddevice as sd
-
-            # Use asyncio-compatible approach
-            loop = asyncio.get_event_loop()
-
-            # For simplicity, accumulate and transcribe in chunks
-            # A full implementation would use the WebSocket streaming API
-            # This is a simplified version that buffers audio chunks
-            # and transcribes when a silence is detected
-
-            queue: asyncio.Queue[float] = asyncio.Queue()
-
-            # This is a placeholder for the streaming implementation
-            # The full streaming setup would involve:
-            # 1. Setting up a WebSocket connection to Deepgram
-            # 2. Sending audio chunks via the socket
-            # 3. Receiving and yielding transcriptions
-            # 4. Detecting end-of-speech via is_final flag
-
-            yield ""
-
-        except Exception as e:
-            log.error("deepgram_stream_error", extra={"error": str(e)})
-            yield ""
+        result = await self.transcribe(audio_chunk)
+        if result:
+            yield result
