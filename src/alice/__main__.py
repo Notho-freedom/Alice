@@ -8,7 +8,7 @@ import sys
 
 import click
 
-from .config import validate_environment
+from .config import validate_environment, resolve_audio_devices
 from .log_utils import setup_logging
 from .terminal.interface import TerminalAssistant
 
@@ -35,6 +35,8 @@ def voice(ptt, continuous, voice, language, list_voices):
 
     from .voice.assistant import VoiceAssistant, VoiceConfig
 
+    input_dev, output_dev = resolve_audio_devices()
+
     # List available voices if requested
     if list_voices:
         from .voice.tts import create_tts
@@ -60,6 +62,8 @@ def voice(ptt, continuous, voice, language, list_voices):
         continuous=continuous,
         voice=voice,
         language=language,
+        input_device=input_dev,
+        output_device=output_dev,
     )
     assistant = VoiceAssistant(voice_config=vc)
     asyncio.run(assistant.initialize())
@@ -110,6 +114,10 @@ def doctor():
         else:
             print("  Speakers: NOT FOUND")
             ok = False
+
+        input_index, output_index = resolve_audio_devices()
+        print(f"  Audio input device index: {input_index}")
+        print(f"  Audio output device index: {output_index}")
     except Exception as e:
         print(f"  Audio: {e}")
         ok = False

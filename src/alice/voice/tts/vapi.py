@@ -15,6 +15,7 @@ import numpy as np
 
 from ... import config
 from .base import TextToSpeech
+from ..voice_picker import resolve_voice_name
 
 log = logging.getLogger("alice.voice.tts.vapi")
 
@@ -56,27 +57,7 @@ class VAPITTS(TextToSpeech):
 
     def _select_voice(self, language: str | None = None) -> str:
         """Select an appropriate voice for the given language."""
-        if not language:
-            language = config.TTS_LANGUAGE_CODE
-
-        lang_code = language.split("-")[0].lower() if language else "en"
-
-        # VAPI voice selection by language
-        voice_map = {
-            "en": self.voice_id or "9b7d887d-3394-4b5e-9adf-021287086938",
-            "fr": self.voice_id or "c2b0de7d-3394-4b5e-9adf-021287086938",
-            "es": "3b01b5e0-3394-4b5e-9adf-021287086938",
-            "de": "08d47bdc-3394-4b5e-9adf-021287086938",
-            "zh": "746116a3-3394-4b5e-9adf-021287086938",
-            "ja": "09b931a0-3394-4b5e-9adf-021287086938",
-            "ko": "47653a10-3394-4b5e-9adf-021287086938",
-            "it": "66ce2150-3394-4b5e-9adf-021287086938",
-            "pt": "5f9c01c0-3394-4b5e-9adf-021287086938",
-            "ru": "3f9b11a0-3394-4b5e-9adf-021287086938",
-            "ar": "a3b511a0-3394-4b5e-9adf-021287086938",
-            "hi": "b3b511a0-3394-4b5e-9adf-021287086938",
-        }
-        return voice_map.get(lang_code, self.voice_id)
+        return resolve_voice_name("vapi", self.voice_id, language)
 
     async def speak(self, text: str, language: str | None = None) -> bool:
         """Speak text via VAPI. Returns True on success, False on failure."""

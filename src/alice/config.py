@@ -18,12 +18,14 @@ KILO_DIRECTORY = os.getenv("KILO_DIRECTORY", os.getcwd())
 KILO_AUTO_APPROVE = os.getenv("KILO_AUTO_APPROVE", "false").lower() in ("1", "true", "yes")
 
 # ── Audio ───────────────────────────────────────────────────────────────
-AUDIO_INPUT_DEVICE = int(os.getenv("AUDIO_INPUT_DEVICE", "1"))
-AUDIO_OUTPUT_DEVICE = int(os.getenv("AUDIO_OUTPUT_DEVICE", "3"))
+AUDIO_INPUT_DEVICE_INDEX = int(os.getenv("AUDIO_INPUT_DEVICE", "1"))
+AUDIO_OUTPUT_DEVICE_INDEX = int(os.getenv("AUDIO_OUTPUT_DEVICE", "3"))
 AUDIO_SAMPLE_RATE = int(os.getenv("AUDIO_SAMPLE_RATE", "16000"))
 AUDIO_CHANNELS = int(os.getenv("AUDIO_CHANNELS", "1"))
 AUDIO_CHUNK_SIZE = int(os.getenv("AUDIO_CHUNK_SIZE", "1024"))
 AUDIO_FRAME_MS = int(os.getenv("AUDIO_FRAME_MS", "30"))
+AUDIO_INPUT_DEVICE = AUDIO_INPUT_DEVICE_INDEX
+AUDIO_OUTPUT_DEVICE = AUDIO_OUTPUT_DEVICE_INDEX
 
 # ── VAD ─────────────────────────────────────────────────────────────────
 VAD_SENSITIVITY = int(os.getenv("VAD_SENSITIVITY", "2"))  # 0-3
@@ -83,6 +85,43 @@ INTERRUPT_THRESHOLD_MS = int(os.getenv("INTERRUPT_THRESHOLD_MS", "300"))
 # ── Logging ─────────────────────────────────────────────────────────────
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 LOG_FILE = os.getenv("LOG_FILE", "")
+
+
+def _resolve_device_index(device_index: int, kind: str):
+    """Resolve an audio device index, with auto-selection fallback."""
+    try:
+        import sounddevice as sd
+    except ImportError:
+        return device_index
+
+    try:
+        devices = sd.query_devices()
+    except Exception:
+        return device_index
+
+    if devices is None or len(devices) == 0:
+        return device_index
+
+    if kind == "input":
+        candidates = [i for i, d in enumerate(devices) if d.get("max_input_channels", 0) > 0]
+    else:
+        candidates = [i for i, d in enumerate(devices) if d.get("max_output_channels", 0) > 0]
+
+    if not candidates:
+        return device_index
+
+    if device_index in candidates:
+        return device_index
+
+    return candidates[0]
+
+
+def resolve_audio_devices():
+    """Resolve effective input/output device indices."""
+    input_index = _resolve_device_index(AUDIO_INPUT_DEVICE_INDEX, "input")
+    output_index = _resolve_device_index(AUDIO_OUTPUT_DEVICE_INDEX, "output")
+    return input_index, output_index
+
 
 # ── Startup validation ──────────────────────────────────────────────────
 def validate_environment() -> list[str]:

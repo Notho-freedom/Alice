@@ -7,7 +7,7 @@ from typing import AsyncIterator, Callable
 
 import numpy as np
 
-from .. import config
+from alice import config
 
 
 class TextToSpeech(ABC):

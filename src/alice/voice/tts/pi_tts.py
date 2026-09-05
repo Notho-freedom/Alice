@@ -15,6 +15,7 @@ import numpy as np
 
 from ... import config
 from .base import TextToSpeech
+from ..voice_picker import resolve_voice_name
 
 log = logging.getLogger("alice.voice.tts.pi_tts")
 
@@ -52,26 +53,7 @@ class PiTTSTTS(TextToSpeech):
 
     def _select_voice(self, language: str | None = None) -> str | None:
         """Select voice name appropriate for the language."""
-        if not language:
-            language = config.TTS_LANGUAGE_CODE
-
-        lang_code = language.split("-")[0].lower() if language else "en"
-
-        voice_map = {
-            "en": "en_US/amy/medium",
-            "fr": "fr/francesco/medium",
-            "es": "es/es/davefx/medium",
-            "de": "de/de/thorsten/medium",
-            "zh": "zh/zh/zh_english/medium",
-            "ja": None,  # Pi TTS doesn't have good Japanese
-            "ko": None,
-            "it": "it/it/mirko/medium",
-            "pt": "pt/pt/pedro/medium",
-            "ru": "ru/ru/irina/medium",
-            "ar": None,
-            "hi": None,
-        }
-        return voice_map.get(lang_code)
+        return resolve_voice_name("pi_tts", None, language)
 
     async def speak(self, text: str, language: str | None = None) -> bool:
         """Speak text via Pi TTS backend. Returns True on success, False on failure."""

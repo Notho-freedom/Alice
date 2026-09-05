@@ -19,6 +19,7 @@ import numpy as np
 
 from ... import config
 from .base import TextToSpeech
+from ..voice_picker import resolve_voice_name
 
 log = logging.getLogger("alice.voice.tts.edge")
 
@@ -59,8 +60,7 @@ class EdgeTTS(TextToSpeech):
 
     def _resolve_voice(self) -> str:
         """Resolve voice name to EdgeTTS voice ID."""
-        voice_lower = self.voice.lower() if self.voice else ""
-        return self._voice_map.get(voice_lower, self.voice or "fr-FR-Elenora")
+        return resolve_voice_name("edge", self.voice, getattr(config, "TTS_LANGUAGE", None))
 
     async def _ensure_session(self):
         if self._session is None or self._session.closed:

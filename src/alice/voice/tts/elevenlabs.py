@@ -16,6 +16,7 @@ import numpy as np
 
 from ... import config
 from .base import TextToSpeech
+from ..voice_picker import resolve_voice_name
 
 log = logging.getLogger("alice.voice.tts.elevenlabs")
 
@@ -115,46 +116,8 @@ class ElevenLabsTTS(TextToSpeech):
         return self._playing
 
     def _resolve_voice_id(self, language: str | None = None) -> str:
-        """Resolve the voice ID based on language, with fallback chain.
-        
-        Priority:
-        1. If voice_name is specified, use it
-        2. If language is French, try French female voices (even if paid, might work)
-        3. Fallback to free English female voices
-        4. Fallback to free English male voices
-        """
-        lang = language or self.language
-        lang_code = lang.split("-")[0].lower() if lang else "fr"
-        
-        # If explicit voice name provided, use it
-        if self.voice_name and self.voice_name.lower() in FREE_VOICES:
-            return FREE_VOICES[self.voice_name.lower()]
-        
-        # French preference - try French voices first (even if paid, they might work)
-        if lang_code == "fr":
-            # Try French voices in order
-            for name in ["marie", "victoria", "anna"]:
-                if name in FRENCH_FEMALE_VOICES:
-                    return FRENCH_FEMALE_VOICES[name]
-        
-        # English fallback - use free female voices
-        if lang_code == "en":
-            # Female voices first
-            for name in ["sarah", "laura", "alice", "matilda", "jessica", "bella", "lily"]:
-                if name in FREE_VOICES:
-                    return FREE_VOICES[name]
-            # Male fallback
-            for name in ["roger", "charlie", "george", "callum", "river"]:
-                if name in FREE_VOICES:
-                    return FREE_VOICES[name]
-        
-        # Default: use first available free female voice
-        for name in ["sarah", "laura", "alice", "matilda", "jessica", "bella", "lily"]:
-            if name in FREE_VOICES:
-                return FREE_VOICES[name]
-        
-        # Last resort: any voice
-        return list(FREE_VOICES.values())[0]
+        """Resolve the voice ID based on language, with fallback chain."""
+        return resolve_voice_name("elevenlabs", self.voice_name, language or self.language)
 
     async def _call_elevenlabs(self, text: str, voice_id: str, api_key: str) -> tuple[bytes, int]:
         """Call ElevenLabs API with a specific key. Returns (audio_data, status_code)."""

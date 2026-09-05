@@ -30,6 +30,9 @@ dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.24",
 ]
+wake = [
+    "pvporcupine>=3.0",
+]
 
 [project.scripts]
 alice = "alice.__main__:cli"

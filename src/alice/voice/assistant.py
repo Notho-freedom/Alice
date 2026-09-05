@@ -21,12 +21,9 @@ import wave
 from dataclasses import dataclass, field
 
 from .. import config
-from ..kilo.client import KiloClient
-from ..kilo.session import SessionManager
-from ..kilo.stream import ResponseStreamProcessor, ChunkType
+from ..kilo.bridge import KiloBridge
 from ..core.state_machine import StateMachine, State, Event
 from ..core.lifecycle import Lifecycle, AppConfig
-from ..core.events import VoiceEvent, AppEvent
 from ..voice.input import AudioInput
 from ..voice.vad import VoiceActivityDetector
 from ..voice.wake import KeywordWakeWord
@@ -63,17 +60,14 @@ class VoiceAssistant:
             auto_approve=config.KILO_AUTO_APPROVE,
         ))
         self.state_machine = StateMachine()
-        self._kilo: KiloClient | None = None
-        self._sessions: SessionManager | None = None
-        self._processor = ResponseStreamProcessor()
-        self._stream = None
+        self._bridge: KiloBridge | None = None
 
         # Voice components
         self._audio: AudioInput | None = None
         self._vad = VoiceActivityDetector()
         self._wake = KeywordWakeWord(self._vad)
-        self._stt: OpenAISTT | None = None
-        self._tts: PyTTSX3TTS | None = None
+        self._stt = None
+        self._tts = None
         self._interrupter: InterruptionHandler | None = None
         self._barge_in = BargeInDetector()
 
@@ -83,20 +77,15 @@ class VoiceAssistant:
         self._text_chunks_received = False
         self._echo_reference = b""
         self._last_barge_in_level = BargeInLevel.NONE
+        self._interrupt_requested = False
 
     async def initialize(self):
         """Start Kilo server, create session, initialize voice components."""
         self.lifecycle.startup()
 
-        # Kilo
-        self._kilo = KiloClient()
-        if not self._kilo.health():
-            log.info("kilo_starting")
-            self._kilo.start_server()
-        self._sessions = SessionManager(self._kilo)
-        self.lifecycle.context.session_id = self._sessions.get_or_create(
-            title="Alice Voice Session"
-        )
+        self._bridge = KiloBridge()
+        await self._bridge.start()
+        self.lifecycle.context.session_id = self._bridge.session_id
 
         # STT
         self._stt = create_stt()
@@ -122,7 +111,7 @@ class VoiceAssistant:
                 lambda: asyncio.create_task(self._tts.stop())
             )
             self._interrupter.set_kilo_interrupt_callback(
-                lambda: self._kilo.interrupt(self.lifecycle.context.session_id)
+                lambda: asyncio.create_task(self._bridge.interrupt())
             )
 
         # Wire state machine transitions
@@ -149,7 +138,10 @@ class VoiceAssistant:
         print(f"  Hold {key.upper()} to speak, release to send.")
         print("  Type '/quit' in another terminal or press Ctrl+C to exit.\n")
 
-        self._audio = AudioInput(callback=self._on_audio_chunk)
+        self._audio = AudioInput(
+            device=self.cfg.input_device,
+            callback=self._on_audio_chunk,
+        )
 
         if self._tts and self._audio:
             self._tts.set_echo_reference_callback(self._audio.update_echo_reference)
@@ -238,7 +230,10 @@ class VoiceAssistant:
         print(f"  Speak naturally. Silence > {config.VAD_MIN_SILENCE_MS}ms ends a turn.")
         print("  Press Ctrl+C to exit.\n")
 
-        self._audio = AudioInput(callback=self._on_audio_chunk)
+        self._audio = AudioInput(
+            device=self.cfg.input_device,
+            callback=self._on_audio_chunk,
+        )
         self._audio.start()
 
         if self._tts and self._audio:
@@ -327,8 +322,8 @@ class VoiceAssistant:
             self._audio.clear_echo_reference()
 
         # Rule E: do NOT destroy Kilo session
-        if self._kilo:
-            self._kilo.interrupt(self.lifecycle.context.session_id)
+        if self._bridge:
+            asyncio.create_task(self._bridge.interrupt())
 
         # Capture pre-roll audio so we don't lose the start of the user's speech
         self._transcription_buffer.clear()
@@ -404,16 +399,7 @@ class VoiceAssistant:
 
     async def _send_and_speak(self, text: str):
         """Send text to Kilo, stream response, and speak it via TTS."""
-        sid = self.lifecycle.context.session_id
-
-        # Start SSE stream first (before sending prompt to catch all events)
-        self._stream = await self._kilo.subscribe_events(sid)
-        await self._stream.start()
         self._interrupt_requested = False
-
-        # Send prompt
-        self._sessions.touch(sid)
-        await asyncio.to_thread(self._kilo.send_prompt, sid, text)
 
         # Queue for streaming TTS
         speech_queue: asyncio.Queue[str | None] = asyncio.Queue()
@@ -428,43 +414,26 @@ class VoiceAssistant:
         # Collect events and feed speech queue
         self._text_chunks_received = False
         got_completion = False
-        timeout = time.time() + 120
         text_buffer = ""
 
-        while time.time() < timeout and not got_completion:
-            try:
-                event = await asyncio.wait_for(self._stream.next_event(), timeout=3)
-            except asyncio.TimeoutError:
-                if got_completion:
-                    break
-                continue
+        async for chunk in self._bridge.send_and_stream(text):
+            if chunk.type.value == "text":
+                text_buffer += chunk.text
+                self._text_chunks_received = True
 
-            if event is None:
-                break
+                if text_buffer.strip().upper().startswith("[IGNORED]"):
+                    self._interrupt_requested = True
+                    continue
 
-            chunks = self._processor.process(event)
-            for chunk in chunks:
-                if chunk.type == ChunkType.TEXT and chunk.text:
-                    text_buffer += chunk.text
-                    self._text_chunks_received = True
-
-                    # Check if Kilo responded with [IGNORED] (not addressing Alice)
-                    if text_buffer.strip().upper().startswith("[IGNORED]"):
-                        # Cancel TTS, don't speak
-                        self._interrupt_requested = True
-                        continue
-
-                    await speech_queue.put(chunk.text)
-                elif chunk.type == ChunkType.COMPLETION:
-                    got_completion = True
-                elif chunk.type == ChunkType.TOOL_START:
-                    print(f"\n[Using tool: {chunk.data.get('tool', '')}]", flush=True)
-                elif chunk.type == ChunkType.STEP_END:
-                    pass  # handled after loop
-                elif chunk.type == ChunkType.ERROR:
-                    log.error("kilo_response_error", extra={"error": chunk.text})
-                    print(f"\n[ERROR: {chunk.text}]", flush=True)
-                    got_completion = True
+                await speech_queue.put(chunk.text)
+            elif chunk.type.value == "completion":
+                got_completion = True
+            elif chunk.type.value == "tool_start":
+                print(f"\n[Using tool: {chunk.data.get('tool', '')}]", flush=True)
+            elif chunk.type.value == "error":
+                log.error("kilo_response_error", extra={"error": chunk.text})
+                print(f"\n[ERROR: {chunk.text}]", flush=True)
+                got_completion = True
 
         # Signal end of speech queue
         await speech_queue.put(None)
@@ -477,29 +446,25 @@ class VoiceAssistant:
         if self._interrupter:
             self._interrupter.stop_monitoring()
 
-        await self._stream.stop()
-        self._stream = None
-
         # If Kilo indicated the message was not for Alice, skip TTS
         if text_buffer.strip().upper().startswith("[IGNORED]"):
             log.info("message_not_for_alice", extra={"transcript": text_buffer[:100]})
-            # Return to listening state without speaking
             if self.state_machine.state == State.THINKING:
-                self.state_machine.fire(Event.THINKING_COMPLETED)  # THINKING -> SPEAKING
+                self.state_machine.fire(Event.THINKING_COMPLETED)
             if self.state_machine.state == State.SPEAKING:
-                self.state_machine.fire(Event.TTS_COMPLETED)  # SPEAKING -> IDLE
-            self.state_machine.fire(Event.START_LISTENING)  # IDLE -> LISTENING
+                self.state_machine.fire(Event.TTS_COMPLETED)
+            self.state_machine.fire(Event.START_LISTENING)
             print(f"\r  [Ignored - listening...]      ", end="", flush=True)
             return
 
         # Return to listening state (state transitions happened in _speak_text)
         if self.state_machine.state == State.SPEAKING:
-            self.state_machine.fire(Event.TTS_COMPLETED)  # SPEAKING -> IDLE
+            self.state_machine.fire(Event.TTS_COMPLETED)
         if self.state_machine.state == State.IDLE:
-            self.state_machine.fire(Event.START_LISTENING)  # IDLE -> LISTENING
+            self.state_machine.fire(Event.START_LISTENING)
         elif self.state_machine.state != State.LISTENING:
-            self.state_machine.fire(Event.RECOVER)  # Any state -> IDLE
-            self.state_machine.fire(Event.START_LISTENING)  # IDLE -> LISTENING
+            self.state_machine.fire(Event.RECOVER)
+            self.state_machine.fire(Event.START_LISTENING)
         print(f"\r  [Listening...]      ", end="", flush=True)
 
     async def _tts_consumer(self, queue: asyncio.Queue):
@@ -561,8 +526,6 @@ class VoiceAssistant:
             self._audio.stop()
         if self._interrupter:
             self._interrupter.stop_monitoring()
-        if self._stream:
-            await self._stream.stop()
-        if self._kilo:
-            self._kilo.stop_server()
+        if hasattr(self, "_bridge"):
+            await self._bridge.close()
         self.lifecycle.shutdown()

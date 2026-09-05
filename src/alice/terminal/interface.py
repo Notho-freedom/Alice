@@ -22,9 +22,9 @@ from rich.text import Text
 from rich.markup import escape
 
 from .. import config
-from ..kilo.client import KiloClient, KiloServerError
-from ..kilo.session import SessionManager
-from ..kilo.stream import ResponseStreamProcessor, ChunkType
+from ..kilo.client import KiloServerError
+from ..kilo.bridge import KiloBridge
+from ..kilo.stream import ChunkType
 from ..core.state_machine import StateMachine, Event
 from ..core.lifecycle import Lifecycle, AppConfig
 
@@ -73,28 +73,22 @@ class TerminalAssistant:
             auto_approve=config.KILO_AUTO_APPROVE,
         ))
         self.state_machine = StateMachine()
-        self._kilo: KiloClient | None = None
-        self._sessions: SessionManager | None = None
+        self._bridge: KiloBridge | None = None
         self._session_id: str | None = None
-        self._processor = ResponseStreamProcessor()
 
     async def initialize(self):
         """Start Kilo server and create session."""
         self._lifecycle.startup()
 
-        self._kilo = KiloClient()
-        if not self._kilo.health():
-            with _console.status("[yellow]Starting Kilo server..."):
-                self._kilo.start_server()
-
-        self._sessions = SessionManager(self._kilo)
-        self._session_id = self._sessions.get_or_create(
-            title="Alice Terminal Session"
-        )
+        self._bridge = KiloBridge()
+        await self._bridge.start()
+        self._session_id = self._bridge.session_id
         self._lifecycle.context.session_id = self._session_id
 
     async def cleanup(self):
         """Clean up resources."""
+        if self._bridge:
+            await self._bridge.close()
         self._lifecycle.shutdown()
 
     def print_banner(self):
@@ -124,53 +118,29 @@ class TerminalAssistant:
         print("  Kilo is thinking ", end="", flush=True)
         spinner = itertools.cycle(["|", "/", "-", "\\"])
 
-        stream = await self._kilo.subscribe_events(self._session_id)
-        await stream.start()
-        await asyncio.sleep(0.5)
-
-        # Send prompt
-        self._sessions.touch(self._session_id)
-        await asyncio.to_thread(self._kilo.send_prompt, self._session_id, text)
-
-        # Process events
         response_text = ""
         tokens = {}
         got_completion = False
-        timeout = time.time() + 120
 
-        while time.time() < timeout and not got_completion:
-            try:
-                event = await asyncio.wait_for(stream.next_event(), timeout=3)
-            except asyncio.TimeoutError:
-                print(f"\r  {next(spinner)} ", end="", flush=True)
-                continue
-
-            if event is None:
-                break
-
-            chunks = self._processor.process(event)
-            for chunk in chunks:
-                if chunk.type == ChunkType.TEXT and chunk.text:
-                    response_text += chunk.text
-                    print(f"\r{chunk.text}", end="", flush=True)
-                elif chunk.type == ChunkType.COMPLETION:
-                    got_completion = True
-                elif chunk.type == ChunkType.TOOL_START:
-                    tool_name = chunk.data.get("tool", "")
-                    print(f"\n  [TOOL] {tool_name}", flush=True)
-                elif chunk.type == ChunkType.STEP_END:
-                    tokens = chunk.data.get("tokens", {})
-                elif chunk.type == ChunkType.ERROR:
-                    print(f"\n  [ERROR] {chunk.text}", flush=True)
-                    got_completion = True
+        async for chunk in self._bridge.send_and_stream(text):
+            if chunk.type.value == "text":
+                response_text += chunk.text
+                print(f"\r{chunk.text}", end="", flush=True)
+            elif chunk.type.value == "completion":
+                got_completion = True
+            elif chunk.type.value == "tool_start":
+                print(f"\n  [TOOL] {chunk.data.get('tool', '')}", flush=True)
+            elif chunk.type.value == "step_end":
+                tokens = chunk.data.get("tokens", {})
+            elif chunk.type.value == "error":
+                print(f"\n  [ERROR] {chunk.text}", flush=True)
+                got_completion = True
 
         print("\r  " + " " * 20 + "\r", end="", flush=True)
-        await stream.stop()
 
         self.state_machine.fire(Event.THINKING_COMPLETED)
         self.state_machine.fire(Event.TTS_COMPLETED)
 
-        # Print metadata
         if tokens:
             total = tokens.get("total", sum(tokens.get(k, 0) for k in ("input", "output", "reasoning")))
             print(f"  [dim]tokens: {total}[/dim]")
