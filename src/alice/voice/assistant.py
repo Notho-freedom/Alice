@@ -26,7 +26,7 @@ from ..core.state_machine import StateMachine, State, Event
 from ..core.lifecycle import Lifecycle, AppConfig
 from ..voice.input import AudioInput
 from ..voice.vad import VoiceActivityDetector
-from ..voice.wake import KeywordWakeWord
+from ..voice.wake import KeywordWakeWord, PorcupineWakeWord, PassthroughWakeWord
 from ..voice.stt import create_stt
 from ..voice.tts import create_tts
 from ..voice.interruption import InterruptionHandler
@@ -65,7 +65,7 @@ class VoiceAssistant:
         # Voice components
         self._audio: AudioInput | None = None
         self._vad = VoiceActivityDetector()
-        self._wake = KeywordWakeWord(self._vad)
+        self._wake: KeywordWakeWord | PorcupineWakeWord | PassthroughWakeWord | None = None
         self._stt = None
         self._tts = None
         self._interrupter: InterruptionHandler | None = None
@@ -116,6 +116,18 @@ class VoiceAssistant:
 
         # Wire state machine transitions
         self.state_machine.on_transition(self._on_state_change)
+
+        # Wake word: prefer Porcupine if available, else fallback
+        try:
+            self._wake = PorcupineWakeWord(self._vad, keyword=self.cfg.wake_word)
+            if getattr(self._wake, "_available", False):
+                log.info("wake_word_provider_available", extra={"provider": "porcupine"})
+            else:
+                self._wake = KeywordWakeWord(self._vad)
+                log.info("wake_word_provider_available", extra={"provider": "keyword"})
+        except Exception as e:
+            self._wake = KeywordWakeWord(self._vad)
+            log.warning("wake_word_fallback", extra={"error": str(e)})
 
     def _on_state_change(self, transition):
         """Called on every state transition - can be used for UI updates."""
@@ -228,6 +240,10 @@ class VoiceAssistant:
         print("\n  Alice Voice Assistant (Conversation Mode)")
         print(f"  Session: {self.lifecycle.context.session_id[:24]}...")
         print(f"  Speak naturally. Silence > {config.VAD_MIN_SILENCE_MS}ms ends a turn.")
+        if self._wake and hasattr(self._wake, "_available") and self._wake._available:
+            print("  Wake word: Porcupine active")
+        else:
+            print("  Wake word: basic VAD fallback")
         print("  Press Ctrl+C to exit.\n")
 
         self._audio = AudioInput(
