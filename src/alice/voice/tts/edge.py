@@ -162,41 +162,23 @@ class EdgeTTS(TextToSpeech):
     async def _play_mp3(self, audio_data: bytes) -> None:
         """Decode and play MP3 audio data."""
         try:
-            import sounddevice as sd
             import soundfile as sf
             import io
 
-            # Decode MP3 → numpy array
             audio_array, sample_rate = sf.read(io.BytesIO(audio_data))
 
-            # Convert to int16 for sounddevice
-            if audio_array.dtype == np.float32 or audio_array.dtype == np.float64:
+            if audio_array.dtype in (np.float32, np.float64):
                 audio_int16 = (audio_array * 32767).astype(np.int16)
             else:
                 audio_int16 = audio_array
 
-            sd.play(
-                audio_int16,
-                samplerate=sample_rate,
-                device=config.AUDIO_OUTPUT_DEVICE,
-                blocking=False,
-            )
-
-            # Wait for playback to finish, supporting interruption via stop_flag
-            while not self._stop_flag:
-                await asyncio.sleep(0.05)
-                stream = sd.get_stream()
-                if stream is not None and not stream.active:
-                    break
-
-            if self._stop_flag:
-                sd.stop()
+            await self._play_int16(audio_int16, sample_rate, lambda: self._stop_flag)
         except ImportError:
-            # soundfile not available — use pyttsx3 as fallback
             log.warning("soundfile_missing_using_pyttsx3_fallback")
             await self._play_via_pyttsx3(audio_data)
         except Exception as e:
-            log.error("audio_playback_failed", extra={"error": str(e), "type": type(e).__name__, "traceback": __import__("traceback").format_exc()})
+            log.error("audio_playback_failed", extra={"error": str(e), "type": type(e).__name__})
+            raise
 
     async def _play_via_pyttsx3(self, audio_data: bytes) -> None:
         """Fallback: pyttsx3 can't play MP3, so just log."""

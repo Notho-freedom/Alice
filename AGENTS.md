@@ -84,11 +84,27 @@ __main__.py    — CLI entry point
 - M1: Kilo Bridge — complete
 - STT: Deepgram with language auto-detection (multilingual)
 - TTS: Provider cascade (ElevenLabs → VAPI → Edge → Pi TTS → pyttsx3)
+- Barge-in: selective barge-in with pre-roll capture and echo suppression
 - M2-M10: pending
+
+### Barge-in / Echo Architecture
+
+Alice must not wait for herself to finish speaking before listening again.
+The current implementation uses a 3-layer approach:
+
+1. **Ring buffer** — continuous capture keeps the last N seconds of audio
+2. **Barge-in detector** — 3 levels: NONE → CANDIDATE → CONFIRMED
+3. **Echo suppression / AEC** — simple energy-based attenuation + optional LMS AEC using TTS playback reference
+
+When barge-in is confirmed:
+- TTS stops immediately
+- Pre-roll audio is preserved
+- State moves to INTERRUPTING → TRANSCRIBING → THINKING
+- Kilo session is preserved (Rule E)
 
 ### Environment
 
 - Python 3.11.9 on Windows (win32)
 - Kilo CLI 7.5.9
 - Audio devices: Microphone Array (idx 1), Speakers (idx 3) via sounddevice
-- Packages: aiohttp, numpy, scipy, sounddevice, webrtcvad, rich, pydantic, click, pyttsx3, openai, requests, soundfile
+- Packages: aiohttp, numpy, scipy, sounddevice, webrtcvad, rich, pydantic, click, pyttsx3, openai, requests, soundfile, websockets

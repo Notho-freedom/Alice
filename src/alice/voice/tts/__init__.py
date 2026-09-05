@@ -44,6 +44,7 @@ class TTSCascade:
         """Try each provider in order until one succeeds."""
         for provider in self.providers:
             self._active = provider
+            result = False
             try:
                 result = await provider.speak(text, language)
                 if result is True:
@@ -54,7 +55,6 @@ class TTSCascade:
                     "error": str(e),
                 })
             finally:
-                # Close HTTP sessions on failed providers
                 if result is not True and hasattr(provider, "_session"):
                     try:
                         if provider._session and not provider._session.closed:

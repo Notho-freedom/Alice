@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 
 import numpy as np
 import webrtcvad
@@ -31,6 +32,7 @@ class VoiceActivityDetector:
         self._speech_active = False
         self.speech_detected = False
         self.silence_detected = False
+        self._lock = threading.Lock()
 
     def process(self, audio: bytes) -> str:
         """Process a chunk of 16-bit PCM audio. Returns 'speech', 'silence', or 'noise'."""
@@ -39,32 +41,35 @@ class VoiceActivityDetector:
 
         is_speech = self._vad.is_speech(audio[: self._frame_size * 2], self._sample_rate)
 
-        if is_speech:
-            self._silence_count = 0
-            if not self._speech_active:
-                self._speech_active = True
-                self.speech_detected = True
-                log.debug("vad_speech_detected")
+        with self._lock:
+            if is_speech:
+                self._silence_count = 0
+                if not self._speech_active:
+                    self._speech_active = True
+                    self.speech_detected = True
+                    log.debug("vad_speech_detected")
+                    return "speech"
+                self.silence_detected = False
                 return "speech"
-            self.silence_detected = False
-            return "speech"
-        else:
-            self._silence_count += 1
-            if self._speech_active:
-                self.silence_detected = True
-                self._speech_active = False
-                self.speech_detected = False
-                log.debug("vad_speech_ended")
-                return "silence"
-            return "noise"
+            else:
+                self._silence_count += 1
+                if self._speech_active:
+                    self.silence_detected = True
+                    self._speech_active = False
+                    self.speech_detected = False
+                    log.debug("vad_speech_ended")
+                    return "silence"
+                return "noise"
 
     def reset(self) -> None:
         """Reset internal state."""
-        self._silence_count = 0
-        self._speech_active = False
-        self.speech_detected = False
-        self.silence_detected = False
+        with self._lock:
+            self._silence_count = 0
+            self._speech_active = False
+            self.speech_detected = False
+            self.silence_detected = False
 
     @property
     def is_speech_active(self) -> bool:
-        return self._speech_active
+        with self._lock:
+            return self._speech_active

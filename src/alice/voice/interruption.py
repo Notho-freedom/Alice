@@ -74,7 +74,7 @@ class InterruptionHandler:
             # The actual audio chunk is processed externally and sets
             # vad.speech_detected
             if self._vad.speech_detected:
-                start_time = time.time()
+                start_time = time.monotonic()
 
                 # Rule A: speech during TTS → immediate interruption
                 if self._tts_stop_cb:
@@ -87,7 +87,7 @@ class InterruptionHandler:
                     log.info("kilo_interrupted")
 
                 self._monitoring = False
-                elapsed_ms = (time.time() - start_time) * 1000
+                elapsed_ms = (time.monotonic() - start_time) * 1000
                 self._interruption_result = InterruptResult(
                     interrupted=True,
                     interrupt_ms=elapsed_ms,

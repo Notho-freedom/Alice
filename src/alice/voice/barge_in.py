@@ -39,9 +39,9 @@ class BargeInDetector:
         self,
         sample_rate: int = config.AUDIO_SAMPLE_RATE,
         vad_sensitivity: int = config.VAD_SENSITIVITY,
-        candidate_ms: int = 300,  # Time to confirm candidate -> confirmed
-        min_speech_ratio: float = 0.6,  # Ratio of speech frames needed in window
-        window_ms: int = 1000,  # Sliding window for speech ratio
+        candidate_ms: int = config.BARGE_IN_CANDIDATE_MS,
+        min_speech_ratio: float = config.BARGE_IN_MIN_SPEECH_RATIO,
+        window_ms: int = config.BARGE_IN_WINDOW_MS,
     ):
         self._vad = VoiceActivityDetector(
             sample_rate=sample_rate,
@@ -104,7 +104,7 @@ class BargeInDetector:
         if self._level == BargeInLevel.NONE:
             if speech_ratio >= self._min_speech_ratio and len(self._speech_history) >= int(self._candidate_ms / self._frame_ms):
                 self._level = BargeInLevel.CANDIDATE
-                self._candidate_start = time.time()
+                self._candidate_start = time.monotonic()
                 log.debug("barge_in_candidate", extra={"ratio": speech_ratio})
 
         elif self._level == BargeInLevel.CANDIDATE:
@@ -114,7 +114,7 @@ class BargeInDetector:
                 self._level = BargeInLevel.NONE
                 self._speech_history = []
                 log.debug("barge_in_rejected")
-            elif time.time() - self._candidate_start >= self._candidate_ms / 1000.0:
+            elif time.monotonic() - self._candidate_start >= self._candidate_ms / 1000.0:
                 # Enough time has passed with speech, confirm
                 self._level = BargeInLevel.CONFIRMED
                 log.debug("barge_in_confirmed")

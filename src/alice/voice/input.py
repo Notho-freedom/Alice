@@ -83,6 +83,44 @@ class RingBuffer:
             return self._total_written
 
 
+class SimpleAEC:
+    """Minimal LMS-based echo canceller for local playback reference."""
+
+    def __init__(self, frame_size: int = 512, mu: float = 0.02, max_echo_delay: int = 2048):
+        self._frame_size = frame_size
+        self._mu = mu
+        self._max_echo_delay = max_echo_delay
+        self.reset()
+
+    def reset(self) -> None:
+        self._reference_buffer = np.zeros(self._max_echo_delay, dtype=np.float32)
+        self._filter = np.zeros(self._max_echo_delay, dtype=np.float32)
+
+    def process(self, mic_frame: np.ndarray, ref_frame: np.ndarray) -> np.ndarray:
+        """Apply simple LMS echo cancellation on one frame."""
+        if mic_frame.size == 0 or ref_frame.size == 0:
+            return mic_frame
+
+        ref = np.asarray(ref_frame, dtype=np.float32).ravel()
+        mic = np.asarray(mic_frame, dtype=np.float32).ravel()
+
+        min_len = min(len(mic), len(ref), self._max_echo_delay)
+        mic = mic[:min_len]
+        ref = ref[:min_len]
+
+        self._reference_buffer = np.roll(self._reference_buffer, -min_len)
+        self._reference_buffer[-min_len:] = ref
+
+        active_filter = self._filter[-min_len:]
+        echo_estimate = np.dot(active_filter, self._reference_buffer[-min_len:])
+        error = mic - echo_estimate
+
+        self._filter[-min_len:] += self._mu * error * self._reference_buffer[-min_len:]
+        self._filter = np.clip(self._filter, -50.0, 50.0)
+
+        return error.astype(np.float32)
+
+
 class AudioInput:
     """Captures audio from the microphone with a callback interface."""
 
@@ -108,10 +146,12 @@ class AudioInput:
         self._ring_buffer = RingBuffer(ring_buffer_bytes)
         self._pre_roll_ms = pre_roll_ms
 
-        # Simple echo suppression: keep a short reference of TTS playback
+        # Echo handling
         self._tts_reference_callback = tts_reference_callback
         self._echo_history = collections.deque(maxlen=20)
         self._echo_energy = 0.0
+        self._aec = SimpleAEC() if getattr(config, "ECHO_CANCELLATION_ENABLED", False) else None
+        self._pending_ref: np.ndarray | None = None
 
     @property
     def ring_buffer(self) -> RingBuffer:
@@ -123,15 +163,17 @@ class AudioInput:
             return
 
         self._listening = True
+        frame_ms = getattr(config, "AUDIO_FRAME_MS", 30)
+        blocksize = int(self._sample_rate * frame_ms / 1000)
         self._stream = sd.InputStream(
             device=self._device,
             samplerate=self._sample_rate,
             channels=self._channels,
             dtype="int16",
-            blocksize=int(self._sample_rate * config.AUDIO_CHUNK_SIZE / 1024),
+            blocksize=blocksize,
         )
         self._stream.start()
-        log.info("audio_input_started", extra={"device": self._device})
+        log.info("audio_input_started", extra={"device": self._device, "frame_ms": frame_ms})
 
         # Start a reader thread since sounddevice uses callbacks
         self._reader = threading.Thread(target=self._read_loop, daemon=True)
@@ -156,8 +198,8 @@ class AudioInput:
                 # Always write to ring buffer for continuous recording
                 self._ring_buffer.write(pcm_bytes)
 
-                # Simple echo suppression: attenuate chunks that look like playback
-                filtered = self._suppress_echo(pcm_bytes)
+                # Echo suppression / AEC
+                filtered = self._process_echo(pcm_bytes)
 
                 # Call callback if provided
                 if self._callback:
@@ -166,17 +208,39 @@ class AudioInput:
                 log.error("audio_input_error", extra={"error": str(e)})
                 break
 
-    def _suppress_echo(self, pcm_bytes: bytes) -> bytes:
-        """Apply simple echo suppression based on TTS reference energy."""
+    def _process_echo(self, pcm_bytes: bytes) -> bytes:
+        """Apply echo cancellation and fallback suppression."""
         try:
             if not pcm_bytes:
+                return pcm_bytes
+
+            mic_frame = np.frombuffer(pcm_bytes, dtype=np.int16).astype(np.float32)
+
+            if self._aec is not None and self._pending_ref is not None:
+                ref_frame = self._pending_ref
+                if len(ref_frame) != len(mic_frame):
+                    min_len = min(len(ref_frame), len(mic_frame))
+                    ref_frame = ref_frame[:min_len]
+                    mic_frame = mic_frame[:min_len]
+
+                processed = self._aec.process(mic_frame, ref_frame)
+                return processed.astype(np.int16).tobytes()
+
+            return self._suppress_echo(pcm_bytes)
+        except Exception:
+            return pcm_bytes
+
+    def _suppress_echo(self, pcm_bytes: bytes) -> bytes:
+        """Fallback simple echo suppression when AEC is disabled."""
+        try:
+            if not pcm_bytes or not config.ECHO_SUPPRESSION_ENABLED:
                 return pcm_bytes
 
             current = np.frombuffer(pcm_bytes, dtype=np.int16).astype(np.float32)
             energy = float(np.mean(current ** 2))
 
-            if self._echo_energy > 0 and energy > self._echo_energy * 0.05:
-                attenuation = max(0.1, 1.0 - min(energy / (self._echo_energy * 4), 0.9))
+            if self._echo_energy > 0 and energy > self._echo_energy * config.ECHO_SUPPRESSION_FACTOR:
+                attenuation = max(0.1, 1.0 - min(energy / (self._echo_energy * 4), config.ECHO_SUPPRESSION_MAX_ATTENUATION))
                 current *= attenuation
                 return current.astype(np.int16).tobytes()
 
@@ -196,6 +260,9 @@ class AudioInput:
                 self._echo_history.append(self._echo_energy)
                 if len(self._echo_history) > 1:
                     self._echo_energy = float(np.mean(self._echo_history))
+
+                if self._aec is not None:
+                    self._pending_ref = reference
         except Exception:
             pass
 
@@ -203,6 +270,9 @@ class AudioInput:
         """Clear echo reference after TTS stops."""
         self._echo_history.clear()
         self._echo_energy = 0.0
+        self._pending_ref = None
+        if self._aec is not None:
+            self._aec.reset()
 
     def read_chunk(self) -> bytes | None:
         """Read one chunk of audio. Used for push-to-talk mode."""

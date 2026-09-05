@@ -151,6 +151,9 @@ class VoiceAssistant:
 
         self._audio = AudioInput(callback=self._on_audio_chunk)
 
+        if self._tts and self._audio:
+            self._tts.set_echo_reference_callback(self._audio.update_echo_reference)
+
         while self.lifecycle.context.running:
             try:
                 press = await asyncio.get_event_loop().run_in_executor(
@@ -166,9 +169,13 @@ class VoiceAssistant:
         await self.cleanup()
 
     def _wait_for_keypress(self, key: str) -> bool:
-        """Simple keypress detection. Returns False if quit requested."""
-        import keyboard  # optional
-        return False
+        """Wait for a keypress. Returns True if the key was pressed, False to quit."""
+        try:
+            import keyboard
+            keyboard.wait(key)
+            return True
+        except ImportError:
+            return False
 
     async def _ptt_cycle(self):
         """One PTT cycle: listen → STT → Kilo → TTS."""
@@ -234,6 +241,9 @@ class VoiceAssistant:
         self._audio = AudioInput(callback=self._on_audio_chunk)
         self._audio.start()
 
+        if self._tts and self._audio:
+            self._tts.set_echo_reference_callback(self._audio.update_echo_reference)
+
         # Start in LISTENING state immediately
         self.state_machine.fire(Event.START_LISTENING)
         print("  [Listening...]", end="", flush=True)
@@ -252,11 +262,18 @@ class VoiceAssistant:
     def _on_audio_chunk(self, audio: bytes):
         """Called for each audio chunk from the microphone (callback thread).
 
-        Handles VAD detection, barge-in during TTS, and audio buffering
-        for STT during listening.
+        Handles VAD detection, wake-word activation, barge-in during TTS,
+        and audio buffering for STT during listening.
         """
         # Feed VAD for state transitions
         vad_result = self._vad.process(audio)
+
+        # ── Wake-word activation from IDLE ──
+        if self.state_machine.state == State.IDLE and self._wake:
+            if self._wake.process(audio):
+                self.state_machine.fire(Event.WAKE_WORD_DETECTED)
+                self.state_machine.fire(Event.START_LISTENING)
+                return
 
         # ── Rule A: speech during SPEAKING → barge-in detection ──
         if self.state_machine.state == State.SPEAKING:
@@ -304,6 +321,10 @@ class VoiceAssistant:
                 self._tts._playing = False
             except Exception as e:
                 log.warning("tts_stop_failed", extra={"error": str(e)})
+
+        # Clear echo reference when TTS stops
+        if self._audio:
+            self._audio.clear_echo_reference()
 
         # Rule E: do NOT destroy Kilo session
         if self._kilo:
@@ -392,7 +413,7 @@ class VoiceAssistant:
 
         # Send prompt
         self._sessions.touch(sid)
-        self._kilo.send_prompt(sid, text)
+        await asyncio.to_thread(self._kilo.send_prompt, sid, text)
 
         # Queue for streaming TTS
         speech_queue: asyncio.Queue[str | None] = asyncio.Queue()
@@ -428,7 +449,7 @@ class VoiceAssistant:
                     self._text_chunks_received = True
 
                     # Check if Kilo responded with [IGNORED] (not addressing Alice)
-                    if "[IGNORED]" in text_buffer[:50]:
+                    if text_buffer.strip().upper().startswith("[IGNORED]"):
                         # Cancel TTS, don't speak
                         self._interrupt_requested = True
                         continue
@@ -460,7 +481,7 @@ class VoiceAssistant:
         self._stream = None
 
         # If Kilo indicated the message was not for Alice, skip TTS
-        if "[IGNORED]" in text_buffer[:200]:
+        if text_buffer.strip().upper().startswith("[IGNORED]"):
             log.info("message_not_for_alice", extra={"transcript": text_buffer[:100]})
             # Return to listening state without speaking
             if self.state_machine.state == State.THINKING:
@@ -528,6 +549,10 @@ class VoiceAssistant:
             await self._tts.speak(text, detected_lang)
         except Exception as e:
             log.error("tts_error", extra={"error": str(e)})
+        finally:
+            # Clear echo reference when TTS completes
+            if self._audio:
+                self._audio.clear_echo_reference()
         self.state_machine.fire(Event.TTS_COMPLETED)
 
     async def cleanup(self):

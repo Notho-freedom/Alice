@@ -141,7 +141,6 @@ class PiTTSTTS(TextToSpeech):
     async def _play_audio(self, audio_data: bytes, content_type: str = "") -> None:
         """Decode and play audio."""
         try:
-            import sounddevice as sd
             import soundfile as sf
             import io
 
@@ -159,21 +158,7 @@ class PiTTSTTS(TextToSpeech):
             else:
                 audio_int16 = audio_array
 
-            sd.play(
-                audio_int16,
-                samplerate=sample_rate,
-                device=config.AUDIO_OUTPUT_DEVICE,
-                blocking=False,
-            )
-
-            while not self._stop_flag:
-                await asyncio.sleep(0.05)
-                stream = sd.get_stream()
-                if stream is not None and not stream.active:
-                    break
-
-            if self._stop_flag:
-                sd.stop()
+            await self._play_int16(audio_int16, sample_rate, lambda: self._stop_flag)
         except ImportError:
             log.warning("soundfile_not_available_for_pi_tts")
         except Exception as e:

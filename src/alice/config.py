@@ -21,13 +21,26 @@ KILO_AUTO_APPROVE = os.getenv("KILO_AUTO_APPROVE", "false").lower() in ("1", "tr
 AUDIO_INPUT_DEVICE = int(os.getenv("AUDIO_INPUT_DEVICE", "1"))
 AUDIO_OUTPUT_DEVICE = int(os.getenv("AUDIO_OUTPUT_DEVICE", "3"))
 AUDIO_SAMPLE_RATE = int(os.getenv("AUDIO_SAMPLE_RATE", "16000"))
-AUDIO_CHUNK_SIZE = int(os.getenv("AUDIO_CHUNK_SIZE", "1024"))
 AUDIO_CHANNELS = int(os.getenv("AUDIO_CHANNELS", "1"))
+AUDIO_CHUNK_SIZE = int(os.getenv("AUDIO_CHUNK_SIZE", "1024"))
+AUDIO_FRAME_MS = int(os.getenv("AUDIO_FRAME_MS", "30"))
 
 # ── VAD ─────────────────────────────────────────────────────────────────
 VAD_SENSITIVITY = int(os.getenv("VAD_SENSITIVITY", "2"))  # 0-3
 VAD_MIN_SPEECH_MS = int(os.getenv("VAD_MIN_SPEECH_MS", "80"))
 VAD_MIN_SILENCE_MS = int(os.getenv("VAD_MIN_SILENCE_MS", "400"))
+
+# ── Barge-in ───────────────────────────────────────────────────────────
+BARGE_IN_ENABLED = os.getenv("BARGE_IN_ENABLED", "true").lower() in ("1", "true", "yes")
+BARGE_IN_CANDIDATE_MS = int(os.getenv("BARGE_IN_CANDIDATE_MS", "300"))
+BARGE_IN_MIN_SPEECH_RATIO = float(os.getenv("BARGE_IN_MIN_SPEECH_RATIO", "0.15"))
+BARGE_IN_WINDOW_MS = int(os.getenv("BARGE_IN_WINDOW_MS", "1000"))
+
+# ── Echo suppression ───────────────────────────────────────────────────
+ECHO_SUPPRESSION_ENABLED = os.getenv("ECHO_SUPPRESSION_ENABLED", "true").lower() in ("1", "true", "yes")
+ECHO_SUPPRESSION_FACTOR = float(os.getenv("ECHO_SUPPRESSION_FACTOR", "0.05"))
+ECHO_SUPPRESSION_MAX_ATTENUATION = float(os.getenv("ECHO_SUPPRESSION_MAX_ATTENUATION", "0.9"))
+ECHO_CANCELLATION_ENABLED = os.getenv("ECHO_CANCELLATION_ENABLED", "false").lower() in ("1", "true", "yes")
 
 # ── Wake Word ───────────────────────────────────────────────────────────
 WAKE_WORD = os.getenv("WAKE_WORD", "hey assistant")

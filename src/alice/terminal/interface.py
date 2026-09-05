@@ -130,7 +130,7 @@ class TerminalAssistant:
 
         # Send prompt
         self._sessions.touch(self._session_id)
-        self._kilo.send_prompt(self._session_id, text)
+        await asyncio.to_thread(self._kilo.send_prompt, self._session_id, text)
 
         # Process events
         response_text = ""

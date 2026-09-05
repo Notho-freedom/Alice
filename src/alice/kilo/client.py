@@ -56,7 +56,7 @@ class KiloClient:
     def start_server(self) -> bool:
         """Start `kilo serve` if not already running. Returns True if ready."""
         if self.health():
-            self._server_started = False
+            self._server_started = True
             return True
 
         log.info("kilo_server_start", extra={"server": self.base_url})
@@ -64,19 +64,29 @@ class KiloClient:
                "--hostname", config.KILO_HOST, "--print-logs"]
         self._process = subprocess.Popen(
             cmd,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             cwd=self.directory,
-            shell=True,
+            shell=False,
         )
         self._server_started = True
 
-        # Wait for server to become healthy
-        for _ in range(30):
+        # Wait for server to become healthy with exponential backoff
+        delay = 0.5
+        for attempt in range(30):
             if self.health():
                 log.info("kilo_server_ready")
                 return True
-            time.sleep(0.5)
+
+            # Check if process crashed
+            if self._process.poll() is not None:
+                stderr = self._process.stderr.read().decode("utf-8", errors="replace") if self._process.stderr else ""
+                raise KiloServerError(
+                    f"Kilo server exited with code {self._process.returncode}: {stderr[:500]}"
+                )
+
+            time.sleep(delay)
+            delay = min(delay * 1.5, 5.0)
 
         raise KiloServerError("Kilo server did not become healthy within 15s")
 
