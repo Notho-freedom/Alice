@@ -1,12 +1,13 @@
 """STT provider using Deepgram (cloud speech recognition).
 
-Uses Deepgram's REST API for file-based transcription.
-No SDK required — just HTTP requests with the API key.
+Uses Deepgram's WebSocket streaming API for real-time transcription.
+No SDK required — just websockets for real-time bidirectional communication.
 Uses DEEPGRAM_API_KEY from environment.
 """
 
 from __future__ import annotations
 
+import asyncio
 import io
 import json
 import logging
@@ -14,6 +15,8 @@ import struct
 import urllib.request
 import wave
 from typing import AsyncIterator
+
+import websockets
 
 from ... import config
 
@@ -129,14 +132,17 @@ class DeepgramSTT:
                     transcript = alternatives[0].get("transcript", "")
                     confidence = alternatives[0].get("confidence", 1.0)
                     
-                    # Filter low-confidence transcripts
-                    if confidence < 0.5:
+                    # Filter only very low-confidence transcripts
+                    if confidence < 0.3:
                         log.warning("stt_low_confidence", extra={"confidence": confidence, "transcript": transcript[:100]})
                         return ""
                     
                     cleaned = transcript.strip()
-                    # Ignore obviously broken transcripts like "Okay....]"
-                    if len(cleaned) < 2 or cleaned.count(".") > 4 or cleaned.count("]") > 0:
+                    # Ignore obviously broken transcripts, but be less aggressive
+                    if len(cleaned) < 2:
+                        return ""
+                    # Only reject if multiple trailing junk chars like "]"
+                    if cleaned.endswith("]") and cleaned.count("]") > 1:
                         return ""
                     
                     return cleaned
@@ -148,10 +154,82 @@ class DeepgramSTT:
             return ""
 
     async def stream(self, audio_chunk: bytes) -> AsyncIterator[str]:
-        """Stream transcription — not implemented for REST API.
+        """Stream transcription using Deepgram WebSocket API.
 
-        Falls back to calling transcribe() on accumulated chunks.
+        Connects to Deepgram WebSocket, sends audio chunks as binary data,
+        and yields partial transcriptions in real-time.
+
+        This is the primary method for real-time streaming transcription.
         """
-        result = await self.transcribe(audio_chunk)
-        if result:
-            yield result
+        if not self.api_key:
+            return
+
+        try:
+            # Build WebSocket URI with parameters
+            language = config.STT_LANGUAGE or "en-US"
+            detect_param = "&detect_language=true" if config.STT_DETECT_LANGUAGE else ""
+            uri = f"wss://api.deepgram.com/v1/listen?model=nova-2{detect_param}&smart_format=true&punctuate=true&language={language}&keyterms=Alice"
+
+            async with websockets.connect(
+                uri,
+                extra_headers={"Authorization": f"Token {self.api_key}"},
+                ping_interval=20,
+                ping_timeout=10,
+                close_timeout=5,
+            ) as websocket:
+                # Send audio chunk as binary data
+                await websocket.send(audio_chunk)
+                
+                # Signal end of stream
+                await websocket.send(json.dumps({
+                    "type": "CloseStream",
+                    "reason": "completion"
+                }))
+
+                # Receive and yield transcriptions
+                async for message in websocket:
+                    try:
+                        data = json.loads(message)
+                        msg_type = data.get("type")
+                        
+                        if msg_type == "Results":
+                            channel = data.get("channel", {})
+                            alternatives = channel.get("alternatives", [])
+                            if alternatives:
+                                transcript = alternatives[0].get("transcript", "")
+                                confidence = alternatives[0].get("confidence", 1.0)
+                                is_final = data.get("is_final", True)
+                                
+                                # Store detected language
+                                detected = data.get("detected_language")
+                                if detected and self.detected_language != detected:
+                                    self.detected_language = detected
+                                    log.info("language_detected", extra={"language": detected})
+                                    if not config.TTS_LANGUAGE:
+                                        config._tts_language = detected
+                                
+                                # Yield transcript if it's final or has content
+                                if transcript and confidence >= 0.3:
+                                    cleaned = transcript.strip()
+                                    if len(cleaned) >= 2:
+                                        if not (cleaned.endswith("]") and cleaned.count("]") > 1):
+                                            yield cleaned
+                        
+                        elif msg_type == "Error":
+                            log.error("deepgram_ws_error", extra={"error": data.get("error", {}).get("message", "")})
+                            break
+                        
+                        elif msg_type == "Close":
+                            log.info("deepgram_stream_closed")
+                            break
+                            
+                    except json.JSONDecodeError:
+                        continue
+                    except Exception as e:
+                        log.error("deepgram_message_error", extra={"error": str(e)})
+                        break
+                        
+        except websockets.exceptions.ConnectionClosed as e:
+            log.info("deepgram_connection_closed", extra={"error": str(e)})
+        except Exception as e:
+            log.error("deepgram_stream_error", extra={"error": str(e), "type": type(e).__name__})

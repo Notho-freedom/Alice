@@ -305,7 +305,7 @@ class VoiceAssistant:
         audio_data = bytes(self._transcription_buffer)
         self._transcription_buffer.clear()
 
-        if len(audio_data) < 1000:
+        if len(audio_data) < 16000:
             self.state_machine.fire(Event.RECOVER)
             self.state_machine.fire(Event.START_LISTENING)
             print("\r  [Listening...]      ", end="", flush=True)
