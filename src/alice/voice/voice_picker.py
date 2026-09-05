@@ -11,6 +11,8 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+import aiohttp
+
 from .. import config
 
 log = logging.getLogger("alice.voice.voice_picker")
@@ -109,10 +111,71 @@ class VoiceDiscovery:
         self._cache: dict[str, list[dict[str, Any]]] = {}
 
     async def discover_edge_voices(self) -> list[dict[str, Any]]:
+        if "edge" in self._cache:
+            return self._cache["edge"]
+
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    f"{config.TTS_BACKEND_URL}/api/voices",
+                    timeout=aiohttp.ClientTimeout(total=5),
+                ) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        voices = data if isinstance(data, list) else data.get("voices", [])
+                        self._cache["edge"] = voices
+                        return voices
+        except Exception as e:
+            log.warning("voice_discovery_edge_failed", extra={"error": str(e)})
+
         return []
 
     async def discover_elevenlabs_voices(self) -> list[dict[str, Any]]:
+        if "elevenlabs" in self._cache:
+            return self._cache["elevenlabs"]
+
+        api_key = config.ELEVENLABS_API_KEY
+        if not api_key:
+            return []
+
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    "https://api.elevenlabs.io/v1/voices",
+                    headers={"xi-api-key": api_key},
+                    timeout=aiohttp.ClientTimeout(total=5),
+                ) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        voices = data.get("voices", [])
+                        self._cache["elevenlabs"] = voices
+                        return voices
+        except Exception as e:
+            log.warning("voice_discovery_elevenlabs_failed", extra={"error": str(e)})
+
         return []
 
     async def discover_vapi_voices(self) -> list[dict[str, Any]]:
+        if "vapi" in self._cache:
+            return self._cache["vapi"]
+
+        api_key = config.VAPI_API_KEY
+        if not api_key:
+            return []
+
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    f"{config.VAPI_BASE_URL}/v1/voices",
+                    headers={"Authorization": f"Bearer {api_key}"},
+                    timeout=aiohttp.ClientTimeout(total=5),
+                ) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        voices = data if isinstance(data, list) else data.get("voices", [])
+                        self._cache["vapi"] = voices
+                        return voices
+        except Exception as e:
+            log.warning("voice_discovery_vapi_failed", extra={"error": str(e)})
+
         return []
