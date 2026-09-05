@@ -33,6 +33,7 @@ from ..voice.wake import KeywordWakeWord
 from ..voice.stt import create_stt
 from ..voice.tts import create_tts
 from ..voice.interruption import InterruptionHandler
+from ..voice.barge_in import BargeInDetector, BargeInLevel
 
 log = logging.getLogger("alice.voice.assistant")
 
@@ -74,11 +75,14 @@ class VoiceAssistant:
         self._stt: OpenAISTT | None = None
         self._tts: PyTTSX3TTS | None = None
         self._interrupter: InterruptionHandler | None = None
+        self._barge_in = BargeInDetector()
 
         # State tracking
         self._transcription_buffer = bytearray()
         self._speaking_text: list[str] = []
         self._text_chunks_received = False
+        self._echo_reference = b""
+        self._last_barge_in_level = BargeInLevel.NONE
 
     async def initialize(self):
         """Start Kilo server, create session, initialize voice components."""
@@ -131,6 +135,10 @@ class VoiceAssistant:
             "to": transition.to_state.value,
             "event": transition.event.value,
         })
+
+        # Reset barge-in detector when starting to speak
+        if transition.to_state == State.SPEAKING:
+            self._barge_in.reset()
 
     # ── Push-to-talk mode ─────────────────────────────────────────────
 
@@ -244,22 +252,26 @@ class VoiceAssistant:
     def _on_audio_chunk(self, audio: bytes):
         """Called for each audio chunk from the microphone (callback thread).
 
-        Handles VAD detection, interruption during TTS (spec section 9),
-        and audio buffering for STT during listening (spec section 4).
+        Handles VAD detection, barge-in during TTS, and audio buffering
+        for STT during listening.
         """
-        # Feed VAD
+        # Feed VAD for state transitions
         vad_result = self._vad.process(audio)
 
-        # ── Rule A: speech during SPEAKING → immediate interruption ──
+        # ── Rule A: speech during SPEAKING → barge-in detection ──
         if self.state_machine.state == State.SPEAKING:
-            if vad_result == "speech":
-                # Rule D: keep Kilo session intact (don't destroy)
-                # Rule E: interrupt speech ≠ destroy session
-                self._handle_interruption()
+            barge_level = self._barge_in.process(audio)
+
+            if barge_level == BargeInLevel.CONFIRMED:
+                # Grab pre-roll before interrupting
+                pre_roll = self._audio.get_pre_roll() if self._audio else b""
+                self._handle_interruption(pre_roll=pre_roll)
             return
 
         # ── During INTERRUPTING: capture new speech ──
         if self.state_machine.state == State.INTERRUPTING:
+            self._transcription_buffer.extend(audio)
+
             if vad_result == "speech":
                 self.state_machine.fire(Event.SPEECH_DETECTED)
             elif vad_result == "silence":
@@ -277,8 +289,8 @@ class VoiceAssistant:
                 if self.state_machine.state == State.TRANSCRIBING:
                     self.state_machine.fire(Event.SPEECH_ENDED)
 
-    def _handle_interruption(self):
-        """User spoke during TTS — immediate interruption (spec section 9)."""
+    def _handle_interruption(self, pre_roll: bytes = b""):
+        """User spoke during TTS — barge-in interruption with pre-roll capture."""
         log.info("interruption_triggered")
         self.state_machine.fire(Event.INTERRUPTION_DETECTED)
 
@@ -297,8 +309,14 @@ class VoiceAssistant:
         if self._kilo:
             self._kilo.interrupt(self.lifecycle.context.session_id)
 
-        self.state_machine.fire(Event.INTERRUPTION_COMPLETED)
-        # After interruption, we go to LISTENING for new speech
+        # Capture pre-roll audio so we don't lose the start of the user's speech
+        self._transcription_buffer.clear()
+        if pre_roll:
+            self._transcription_buffer.extend(pre_roll)
+            log.info("pre_roll_captured", extra={"bytes": len(pre_roll)})
+
+        # Continue capturing new speech in INTERRUPTING state
+        # Don't fire INTERRUPTION_COMPLETED here — let the VAD flow continue
 
     async def _handle_transcription(self):
         """Process the transcription buffer: STT → Kilo → TTS."""
@@ -496,6 +514,9 @@ class VoiceAssistant:
         # Check if we're in INTERRUPTING state (interrupted)
         if self.state_machine.state == State.INTERRUPTING:
             return
+
+        # Reset barge-in detector before speaking
+        self._barge_in.reset()
 
         # Get detected language from STT for appropriate voice selection
         detected_lang = None
