@@ -129,6 +129,18 @@ class VoiceAssistant:
             self._wake = KeywordWakeWord(self._vad)
             log.warning("wake_word_fallback", extra={"error": str(e)})
 
+    def health_check(self) -> dict:
+        """Return health status of all components."""
+        status = {
+            "kilo": self._bridge is not None,
+            "stt": self._stt is not None,
+            "tts": self._tts is not None,
+            "audio": self._audio is not None and self._audio.is_listening,
+            "wake_word": self._wake is not None,
+            "wake_word_available": getattr(self._wake, "_available", False),
+        }
+        return status
+
     def _on_state_change(self, transition):
         """Called on every state transition - can be used for UI updates."""
         log.info("state_transition", extra={
@@ -141,6 +153,10 @@ class VoiceAssistant:
         if transition.to_state == State.SPEAKING:
             self._barge_in.reset()
 
+        # Reset wake word when returning to listening
+        if transition.to_state == State.LISTENING and self._wake:
+            self._wake.reset()
+
     # ── Push-to-talk mode ─────────────────────────────────────────────
 
     async def run_push_to_talk(self, key: str = "ctrl"):
@@ -148,6 +164,10 @@ class VoiceAssistant:
         print("\n  Alice Voice Assistant (Push-to-Talk)")
         print(f"  Session: {self.lifecycle.context.session_id[:24]}...")
         print(f"  Hold {key.upper()} to speak, release to send.")
+        if self._wake and hasattr(self._wake, "_available") and self._wake._available:
+            print("  Wake word: Porcupine active")
+        else:
+            print("  Wake word: basic VAD fallback")
         print("  Type '/quit' in another terminal or press Ctrl+C to exit.\n")
 
         self._audio = AudioInput(
@@ -279,11 +299,13 @@ class VoiceAssistant:
         # Feed VAD for state transitions
         vad_result = self._vad.process(audio)
 
-        # ── Wake-word activation from IDLE ──
-        if self.state_machine.state == State.IDLE and self._wake:
+        # ── Wake-word activation from IDLE or LISTENING ──
+        if self.state_machine.state in (State.IDLE, State.LISTENING) and self._wake:
             if self._wake.process(audio):
                 self.state_machine.fire(Event.WAKE_WORD_DETECTED)
-                self.state_machine.fire(Event.START_LISTENING)
+                if self.state_machine.state == State.IDLE:
+                    self.state_machine.fire(Event.START_LISTENING)
+                log.info("wake_word_activated", extra={"state": self.state_machine.state.value})
                 return
 
         # ── Rule A: speech during SPEAKING → barge-in detection ──
