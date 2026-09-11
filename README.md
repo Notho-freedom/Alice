@@ -1,5 +1,11 @@
 # Alice
 
+[![Python](https://img.shields.io/badge/Python-3.11%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
+[![STT](https://img.shields.io/badge/STT-Deepgram-111111?logo=deepgram&logoColor=white)](https://deepgram.com/)
+[![TTS](https://img.shields.io/badge/TTS-Multi--provider-6C47FF)](#providers)
+[![Kilo Code](https://img.shields.io/badge/Brain-Kilo%20Code-111111)](https://kilo.ai/)
+[![Tests](https://img.shields.io/badge/Tests-pytest-0A9EDC?logo=pytest&logoColor=white)](https://pytest.org/)
+
 Local voice assistant powered by Kilo Code.
 
 Alice captures microphone input, transcribes speech, sends it to Kilo, and speaks the response back. It supports push-to-talk, continuous conversation with wake-word detection, selective barge-in, and echo suppression.
