@@ -8,6 +8,8 @@ env/
 venv/
 .venv/
 .env
+.env.*
+!.env.example
 *.egg-info/
 dist/
 build/
